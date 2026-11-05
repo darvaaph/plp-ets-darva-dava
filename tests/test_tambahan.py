@@ -40,3 +40,13 @@ def test_regresi_bug5_operator_tidak_sama_dengan():
     toks = tokenize("SELECT id FROM t WHERE a <> 1")
     ops = [t.value for t in toks if t.type == T.OP]
     assert ops == ["<>"]
+
+def test_regresi_bug6_panic_mode_lanjut_ke_statement_berikutnya():
+    sql = """
+    SELECT id FROM pelanggan;
+    SELECT id nama, FROM pesanan;
+    UPDATE produk SET stok = 1;
+    """
+    script = parse_sql(sql)
+    assert len(script.errors) == 1
+    assert len(script.statements) == 2
