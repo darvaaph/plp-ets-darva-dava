@@ -81,3 +81,27 @@ def test_regresi_bug6_panic_mode_lanjut_ke_statement_berikutnya():
     script = parse_sql(sql)
     assert len(script.errors) == 1
     assert len(script.statements) == 2
+
+def test_regresi_bug7_shadowing_alias_subquery_menimpa_luar():
+    """SPESIFIKASI.md 4.3: qualifier dicari dari scope terdalam ke luar (shadowing).
+
+    Jika outer query dan inner subquery sama-sama memakai alias 'x',
+    kolom di dalam subquery harus di-resolve ke tabel milik subquery (inner),
+    bukan tabel milik outer query.
+    """
+    sql = """
+    SELECT x.id FROM pelanggan x
+    WHERE x.id IN (SELECT x.pelanggan_id FROM pesanan x WHERE x.total > 500000);
+    """
+    script = parse_sql(sql)
+    assert script.errors == []
+    diags = Resolver().resolve_script(script)
+    assert diags == []
+
+    cols = [c for c in ast.iter_nodes(script) if isinstance(c, ast.ColumnRef)]
+    # Outer query: x.id -> pelanggan
+    assert cols[0].resolved == "pelanggan"
+    assert cols[1].resolved == "pelanggan"
+    # Inner subquery: x.pelanggan_id dan x.total harus merujuk ke pesanan, bukan pelanggan
+    assert cols[2].resolved == "pesanan"
+    assert cols[3].resolved == "pesanan"

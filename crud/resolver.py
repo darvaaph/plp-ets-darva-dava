@@ -91,7 +91,7 @@ class Resolver:
         while scope is not None:
             chain.append(scope)
             scope = scope.parent
-        for scope in reversed(chain):
+        for scope in chain:
             if name in scope.entries:
                 return scope.entries[name]
         return None
