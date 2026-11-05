@@ -249,9 +249,17 @@ class Parser:
         return self._logical()
 
     def _logical(self):
-        # OR dan AND: operator logika biner, asosiatif kiri.
+        # OR: derajat 1 (terendah), asosiatif kiri - SPESIFIKASI.md bagian 3.1.
+        left = self._and()
+        while self._check_kw("OR"):
+            op = self._advance().value
+            left = ast.BinaryOp(left, op, self._and())
+        return left
+
+    def _and(self):
+        # AND: derajat 2, memanggil turunan derajat lebih tinggi.
         left = self._not()
-        while self._check_kw("AND", "OR"):
+        while self._check_kw("AND"):
             op = self._advance().value
             left = ast.BinaryOp(left, op, self._not())
         return left

@@ -55,7 +55,7 @@ Alternatif `replace("''", "'")` pada seluruh teks sumber ditolak karena merusak 
 
 ## Bug 3: Derajat Operator AND dan OR Dianggap Sama Kuat
 
-**Ditemukan oleh:** Darva
+**Ditemukan oleh:** Darva · **Diperbaiki oleh:** Dava
 
 **Gejala.** Waktu menjalankan perintah `python -m crud.cli data/sample/audit.sql --ast` di terminal untuk melihat pohon sintaks (AST) pada baris 2, ada query `WHERE ... OR ... AND ...`. Anehnya, di pohon yang dicetak, operator `AND` ditaruh di paling atas (menjadi root), yang artinya query dibaca seolah-olah `(a OR b) AND c`. Padahal menurut SPESIFIKASI.md Bagian 3.1, operator `AND` derajatnya lebih tinggi (tingkat 2) daripada `OR` (tingkat 1), mirip seperti perkalian lebih didahulukan daripada penjumlahan. Jadi seharusnya query dibaca sebagai `a OR (b AND c)`.
 
@@ -68,7 +68,11 @@ SELECT id FROM t WHERE a = 1 OR b = 2 AND c = 3;
 Karena digabung, parser menganggap `AND` dan `OR` kekuatannya setara, sehingga parser hanya membaca lurus dari kiri ke kanan (yang datang duluan dikerjakan duluan).
 Mengacu pada **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.2 Precedence and Associativity)**, tata bahasa untuk operator yang beda tingkatan harus dipisah ke fungsi yang berbeda secara berjenjang (*stratified functions*). Fungsi operator berderajat rendah (seperti `OR`) harus memanggil fungsi operator berderajat lebih tinggi (seperti `AND`), bukan disatukan di satu fungsi.
 
-**Peran AI.** Saya menanyakan ke AI kenapa pohon AST di `audit.sql` baris 2 operator `AND`-nya berada di paling luar/atas. AI menjelaskan bahwa fungsi `_logical()` di parser mencampur `AND` dan `OR` jadi satu perulangan. Saya memverifikasinya sendiri dengan membaca alur kode `_logical()` di baris 251 `crud/parser.py`.
+**Perbaikan.** Di file `crud/parser.py`, fungsi `_logical()` dipersempit agar hanya menangani `OR` dan memanggil `_and()`, sedangkan fungsi baru `_and()` menangani `AND` dan memanggil `_not()`. Rantai `_expr()` tidak berubah sehingga seluruh pemanggilnya tetap aman. `BETWEEN a AND b` tetap benar karena `AND` milik `BETWEEN` sudah dikonsumsi `_comparison()` sebelum perulangan `_and()`. Alternatif mempertahankan satu perulangan `AND`/`OR` ditolak karena melanggar presedensi SPESIFIKASI.md bagian 3.1, sedangkan tabel presedensi dinilai berlebihan untuk dua tingkat operator.
+
+**Test regresi.** `test_regresi_bug3_and_lebih_kuat_dari_or` di `tests/test_tambahan.py`.
+
+**Peran AI.** Pohon AST `data/sample/audit.sql` baris 2 yang menaruh `AND` sebagai root sempat ditanyakan ke AI. AI menunjuk fungsi `_logical()` yang menggabungkan `AND` dan `OR` dalam satu perulangan dan menjelaskan pemisahan berjenjang pada Bab 6.2 *Crafting Interpreters*. Pernyataan itu diverifikasi dengan membaca `_logical()` baris 251–257 dan menjalankan `python -m pytest tests/test_tambahan.py` (test Bug 3 gagal sebelum perbaikan, 5 passed sesudahnya).
 
 ---
 
