@@ -30,7 +30,7 @@ Sesuai penjelasan di **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.
 
 ## Bug 2: Karakter Escape Dua Kutip Tunggal ('') di Dalam String Terpotong.
 
-**Ditemukan oleh:** Darva
+**Ditemukan oleh:** Darva · **Diperbaiki oleh:** Dava
 
 **Gejala.** Waktu kami memeriksa file contoh `data/sample/pemeliharaan.sql`, di baris 6 ada tulisan nama orang `'O''Brien'`. Saat kami coba jalankan leksingnya, kata tersebut malah terpotong menjadi `'O'` saja, lalu sisa hurufnya membuat program error. Padahal menurut SPESIFIKASI.md Bagian 2.4, di dalam aturan SQL kalau ada dua tanda kutip tunggal berdampingan (`''`), itu maksudnya bukan penutup kalimat, melainkan cara menulis satu karakter tanda kutip di dalam teks. Jadi `'O''Brien'` seharusnya tetap utuh menjadi satu kata string bernilai `O'Brien`.
 
@@ -43,7 +43,13 @@ SELECT 'O''Brien' FROM t;
 Kodenya tidak mengecek karakter berikutnya (*tidak melakukan lookahead*). Padahal tanda kutip dalam SQL punya dua kemungkinan: bisa sebagai penutup kalimat teks, atau sebagai tanda *escape* jika langsung diikuti tanda kutip lagi (`''`).
 Sesuai penjelasan di **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.6 Longer Lexemes / String Literals)**, saat membaca teks string yang karakternya punya makna ganda (*escape sequence*), scanner wajib mengintip satu karakter ke depan (*lookahead*) sebelum memutuskan apakah itu tanda penutup string atau bukan.
 
-**Peran AI.** Saya menanyakan ke AI bagaimana sebenarnya SQL membedakan tanda kutip penutup dengan tanda kutip di dalam nama seperti O'Brien tanpa tanda garis miring (backslash). AI menjelaskan konsep escape `''` dan perlunya lookahead. Saya memverifikasinya dengan membaca fungsi `_string()` yang memang langsung berhenti tanpa melihat karakter berikutnya.
+**Perbaikan.** Di `crud/lexer.py`, fungsi `_string()` (baris 153–163) kini mengintip satu karakter setelah kutip tunggal memakai helper `_match("'")` yang sudah tersedia. Kalau karakter berikutnya juga kutip, pasangan `''` dikonsumsi sebagai escape dan satu karakter `'` dimasukkan ke nilai string; kalau bukan, kutip diperlakukan sebagai penutup. Perubahan hanya tiga baris, tanpa method atau state baru.
+
+Alternatif `replace("''", "'")` pada seluruh teks sumber ditolak karena merusak posisi baris/kolom token dan bisa mengubah token di luar string. Escape backslash (`\'`) dan string kutip ganda tidak ditambahkan karena di luar lingkup SPESIFIKASI.md bagian 2.4.
+
+**Test regresi.** `test_regresi_bug2_escape_kutip_ganda_dalam_string` di `tests/test_tambahan.py` memastikan `'O''Brien'` menjadi satu token `STRING` bernilai `O'Brien`, bukan dua token. Status: `python -m pytest tests/test_tambahan.py -v` → 2 passed.
+
+**Peran AI.** Gejala string `'O''Brien'` yang terpotong sempat ditanyakan ke AI. AI menjelaskan konsep escape `''` dan perlunya *lookahead* satu karakter, lalu menunjuk `_string()` yang berhenti tanpa mengecek karakter berikutnya. Rancangan perbaikan minimal dengan `_match("'")` juga diajukan AI. Pernyataan itu diverifikasi dengan membaca `_string()`, mencocokkannya ke SPESIFIKASI.md bagian 2.4, dan menjalankan `python -m pytest tests/test_tambahan.py` (2 passed).
 
 ---
 
