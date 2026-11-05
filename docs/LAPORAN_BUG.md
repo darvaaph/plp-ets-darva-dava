@@ -184,25 +184,26 @@ Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3.
 
 ## Bug 7: Alias dari Luar Subquery Mengalahkan Alias di Dalam Subquery
 
-**Ditemukan oleh:** Dava
+**Ditemukan oleh:** Dava · **Diperbaiki oleh:** Darva
 
 **Gejala.** SPESIFIKASI.md Bagian 4.3 mengatur bahwa pencarian alias harus berjalan dari scope terdalam ke luar (*shadowing*). Pada query bersarang di `data/sample/audit.sql` baris 12–14: `SELECT x.id FROM pelanggan x WHERE x.id IN (SELECT x.pelanggan_id FROM pesanan x ...);`, kolom `x.pelanggan_id` di dalam subquery malah di-resolve ke `pelanggan` (tabel luar), bukan ke `pesanan` (tabel subquery).
 
 **Reproduksi minimal.**
 
 ```sql
-
 SELECT x.id FROM pelanggan x
-
 WHERE x.id IN (SELECT x.pelanggan_id FROM pesanan x WHERE x.total > 500000);
-
 ```
 
 **Akar masalah.** Di `crud/resolver.py` pada fungsi `_lookup()`, rantai scope dikumpulkan dari dalam ke luar (`chain[0]` = scope terdalam), tetapi pencariannya ditulis `for scope in reversed(chain):`. Pemanggilan `reversed()` membuat pencarian dimulai dari scope terluar, sehingga alias di query luar menimpa alias di dalam subquery.
 
 Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.3 A Resolver Class)**, resolusi variabel harus mencari dari scope lokal/terdalam terlebih dahulu sebelum mencari ke scope induknya.
 
-**Peran AI.** AI menunjukkan pemanggilan `reversed(chain)` pada fungsi `_lookup()`. Kami memverifikasinya dengan mencetak atribut `resolved` kolom subquery di terminal.
+**Perbaikan.** Di file `crud/resolver.py` pada fungsi `_lookup()`, kami menghapus pemanggilan `reversed()` sehingga loop menjadi `for scope in chain:`. Karena elemen `chain` dikumpulkan mulai dari `self.scope` (scope terdalam) lalu naik ke `parent`, iterasi langsung mencari dari scope terdalam ke scope luar. Dengan begitu, alias lokal di dalam subquery menutupi (*shadow*) alias bernama sama dari query luar.
+
+**Test regresi.** `test_regresi_bug7_shadowing_alias_subquery_menimpa_luar` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membantu menganalisis alur loop pada `_lookup()` yang ternyata dibalik dengan `reversed()`. Kami memverifikasinya dengan membuat test regresi untuk kasus subquery yang menggunakan alias yang sama dengan query luar hingga test berhasil lulus.
 
 ---
 
@@ -238,4 +239,5 @@ Aturan ini mengacu pada aturan proyek di SPESIFIKASI.md Bagian 5 (tabel aturan C
 
 **Test regresi.** `test_regresi_bug8_subquery_update_dibaca_bukan_diubah` di `tests/test_tambahan.py`.
 
-**Peran AI.** AI membandingkan penanganan `UPDATE` dan `DELETE` di `analyzer.py` dan menunjukkan perbedaan operasi yang dikirim ke `_collect()`. Kami memverifikasinya dengan menjalankan `analyze_statement()` pada query tersebut dan test regresinya sampai lulus.
+**Peran AI.** AI membandingkan penanganan `UPDATE` dan `DELETE` di `analyzer.py` dan menunjukkan perbedaan operasi yang dikirim ke `_collect()`. Kami memverifikasinya dengan menjalankan `analyze_statement()` pada query tersebut dan test regresinya sampai lulus.
+
