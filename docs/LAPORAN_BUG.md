@@ -7,7 +7,7 @@ sendiri dan memakai konsep dari *Crafting Interpreters* (sebutkan bab). Bagian i
 
 ## Bug 1: Kata Kunci Huruf Kecil Salah Dikenali Sebagai Kolom Biasa
 
-**Ditemukan oleh:** Darva
+**Ditemukan oleh:** Darva · **Diperbaiki oleh:** Darva
 
 **Gejala.** Waktu pertama kali menjalankan perintah `python -m pytest` di terminal, pengujian di file `tests/test_lexer.py` pada fungsi `test_keyword_huruf_kecil` langsung gagal merah. Saat query seperti `select id from t;` diperiksa, kata `select` tidak dianggap sebagai kata kunci (`KEYWORD`), melainkan dicap sebagai nama kolom biasa (`IDENT`). Padahal menurut SPESIFIKASI.md Bagian 2.2, SQL tidak peduli huruf besar atau kecil (`select`, `Select`, dan `SELECT` itu sama saja) dan nilainya harus otomatis diubah menjadi huruf kapital `SELECT`.
 
@@ -20,11 +20,15 @@ select id from t;
 Masalahnya, di Python perbandingan string itu sensitif huruf besar-kecil (*case-sensitive*). Karena daftar `KEYWORDS` isinya huruf besar semua (`SELECT`, `FROM`, dll.), Python merasa `'select'` (huruf kecil) tidak ada di daftar tersebut. Akhirnya kode melompat ke blok `else` dan kata `select` malah dianggap nama kolom biasa (`IDENT`). 
 Sesuai penjelasan di **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.7 Reserved Words and Identifiers)**, scanner membedakan kata kunci dan nama kolom dengan mencari kata tersebut di kamus kata kunci. Karena SQL tidak peduli huruf besar-kecil, scanner seharusnya menyamakan format hurufnya dulu (diubah ke kapital dengan `.upper()`) sebelum dicocokkan ke kamus agar tidak keliru menganggap kata kunci sebagai nama kolom biasa.
 
+**Perbaikan.** Di file `crud/lexer.py` pada fungsi `_word()`, teks dinormalisasi ke huruf kapital dengan `upper = text.upper()` sebelum dicocokkan ke `KEYWORDS`. Jika cocok, nilai `upper` disimpan sebagai token `KEYWORD`. Jika tidak cocok, teks asli tetap disimpan sebagai `IDENT`. Alternatif mengubah daftar `KEYWORDS` menjadi huruf kecil ditolak karena SPESIFIKASI.md bagian 2.2 menetapkan nilai token harus berupa huruf kapital.
+
+**Test regresi.** `test_regresi_bug1_keyword_huruf_kecil` di `tests/test_tambahan.py`.
+
 **Peran AI.** Saya menanyakan ke AI kenapa `select` huruf kecil di pytest bisa gagal padahal katanya SQL tidak sensitif huruf. AI menunjukkan bahwa baris `if text in KEYWORDS` di lexer masih case-sensitive. Saya memverifikasinya sendiri dengan mencoba memanggil `tokenize("select id")` di terminal dan melihat token yang keluar memang `IDENT`.
 
 ---
 
-## Bug 2: Tanda Kutip Ganda di Dalam Teks String Terpotong
+## Bug 2: Karakter Escape Dua Kutip Tunggal ('') di Dalam String Terpotong.
 
 **Ditemukan oleh:** Darva
 
