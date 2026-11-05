@@ -10,6 +10,8 @@ from crud.lexer import TokenType as T, tokenize
 from crud.parser import parse_sql
 from crud import ast_nodes as ast
 from crud.resolver import Resolver
+from crud.analyzer import analyze_statement
+
 
 def test_regresi_bug1_keyword_huruf_kecil():
     toks = tokenize("select id from t where aktif = 1")
@@ -105,3 +107,25 @@ def test_regresi_bug7_shadowing_alias_subquery_menimpa_luar():
     # Inner subquery: x.pelanggan_id dan x.total harus merujuk ke pesanan, bukan pelanggan
     assert cols[2].resolved == "pesanan"
     assert cols[3].resolved == "pesanan"
+    
+def test_regresi_bug8_subquery_update_dibaca_bukan_diubah():
+    """SPESIFIKASI.md 5: subquery di UPDATE selalu R, target tetap U.
+
+    Sebelum perbaikan, analyzer meneruskan op 'U' ke _collect() sehingga
+    'pelanggan' di dalam subquery ikut dicap Update.
+    """
+    script = parse_sql(
+        "UPDATE pesanan SET status = 'BATAL' "
+        "WHERE pelanggan_id IN (SELECT id FROM pelanggan WHERE diblokir = 1);")
+    assert script.errors == []
+    assert analyze_statement(script.statements[0]) == {
+        "pesanan": {"U"}, "pelanggan": {"R"}}
+    
+def test_tepi_subquery_di_set_update_dibaca():
+    """Kasus tepi: subquery di SET juga wajib R dan berasal dari pemanggilan
+    _collect() yang berbeda dari WHERE. Risiko: hanya satu jalur yang diperbaiki."""
+    script = parse_sql(
+        "UPDATE pesanan SET total = (SELECT SUM(total) FROM arsip) WHERE id = 1;")
+    assert script.errors == []
+    assert analyze_statement(script.statements[0]) == {
+        "pesanan": {"U"}, "arsip": {"R"}}
