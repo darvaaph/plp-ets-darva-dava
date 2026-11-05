@@ -94,7 +94,7 @@ Sesuai konsep di **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - 
 
 ## Bug 5: Operator `<>` Terbelah Jadi Dua Token
 
-**Ditemukan oleh:** Dava
+**Ditemukan oleh:** Dava · **Diperbaiki oleh:** Darva
 
 **Gejala.** SPESIFIKASI.md bagian 2.5 mewajibkan lexer mengambil operator terpanjang (*maximal munch*), jadi `<>` harus keluar sebagai satu token. Untuk mengujinya, query `SELECT id FROM t WHERE a <> 1;` di-tokenisasi lewat `tokenize()`. Hasilnya justru terbelah: `OP '<'` (baris 1, kolom 26) lalu `OP '>'` (baris 1, kolom 27). Parser otomatis kaget karena setelah `<` datang `>` yang tidak ia harapkan — padahal aturan maximal munch jelas dilanggar.
 
@@ -109,6 +109,10 @@ python -c "from crud.lexer import tokenize; print(tokenize('SELECT id FROM t WHE
 **Akar masalah.** Di `crud/lexer.py`, blok pembaca karakter `<` di `_scan_token()` hanya menguji satu kemungkinan: `op = "<=" if self._match("=") else "<"`. Karena karakter berikutnya bukan `=`, token langsung diputus `"<"`; `>` tidak pernah diuji sebagai pasangan `<`, sehingga jatuh ke pemanggilan `_scan_token()` berikutnya dan berubah jadi token baru.
 
 Menurut *Crafting Interpreters* Bab 4 (*Scanning*, sub-bab 4.5 *Recognizing Lexemes*), operator dua karakter dikenali lewat *lookahead* — mengecek karakter berikutnya sebelum token diputuskan. Di bab yang sama berlaku prinsip *maximal munch*: kalau dua aturan sama-sama cocok, yang terpanjang menang. Kode kita baru menguji `<=`, belum `<>`, jadi aturan terpanjangnya tidak pernah punya kesempatan menang.
+
+**Perbaikan.** Di file `crud/lexer.py` pada fungsi `_scan_token()`, ditambahkan pengecekan `self._match(">")` saat membaca karakter `<` sehingga menghasilkan token `OP '<>'`. Alternatif membiarkan parser menyatukan dua token ditolak karena melanggar aturan maximal munch pada tahap lexer.
+
+**Test regresi.** `test_regresi_bug5_operator_tidak_sama_dengan` di `tests/test_tambahan.py`.
 
 **Peran AI.** Hasil `tokenize()` yang membelah `<>` sempat ditanyakan ke AI. AI menunjuk baris `if ch == "<"` di `lexer.py` yang hanya menguji `=` dan menjelaskan prinsip *maximal munch*. Pernyataan itu diverifikasi dengan membandingkan hasil `tokenize()` dengan daftar operator di SPESIFIKASI.md bagian 2.5.
 

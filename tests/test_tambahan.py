@@ -18,3 +18,8 @@ def test_regresi_bug2_escape_kutip_ganda_dalam_string():
     toks = tokenize("SELECT 'O''Brien' FROM t")
     assert toks[1].type == T.STRING and toks[1].value == "O'Brien"
     assert sum(t.type == T.STRING for t in toks) == 1
+
+def test_regresi_bug5_operator_tidak_sama_dengan():
+    toks = tokenize("SELECT id FROM t WHERE a <> 1")
+    ops = [t.value for t in toks if t.type == T.OP]
+    assert ops == ["<>"]
