@@ -129,3 +129,10 @@ def test_tepi_subquery_di_set_update_dibaca():
     assert script.errors == []
     assert analyze_statement(script.statements[0]) == {
         "pesanan": {"U"}, "arsip": {"R"}}
+
+def test_tepi_komentar_blok_berisi_bintang_dan_baris_baru():
+    """Kasus tepi: komentar blok multi-baris yang memuat karakter '*' di dalamnya
+    tidak boleh salah dianggap sebagai penutup komentar. Risiko: komentar tertutup prematur."""
+    sql = "/* komentar * dengan * bintang \n dan baris baru **/ SELECT 1;"
+    toks = tokenize(sql)
+    assert toks[0].value == "SELECT" and toks[0].line == 2
