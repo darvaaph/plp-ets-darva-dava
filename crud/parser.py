@@ -91,7 +91,8 @@ class Parser:
         # Panic mode (Crafting Interpreters bab 6): buang token sampai
         # titik aman, lalu lanjutkan parsing.
         while not self._at_end():
-            self._advance()
+            if self._advance().type == T.SEMICOLON:
+                return
 
     def _statement(self):
         if self._check_kw("SELECT"):
@@ -249,9 +250,17 @@ class Parser:
         return self._logical()
 
     def _logical(self):
-        # OR dan AND: operator logika biner, asosiatif kiri.
+        # OR: derajat 1 (terendah), asosiatif kiri - SPESIFIKASI.md bagian 3.1.
+        left = self._and()
+        while self._check_kw("OR"):
+            op = self._advance().value
+            left = ast.BinaryOp(left, op, self._and())
+        return left
+
+    def _and(self):
+        # AND: derajat 2, memanggil turunan derajat lebih tinggi.
         left = self._not()
-        while self._check_kw("AND", "OR"):
+        while self._check_kw("AND"):
             op = self._advance().value
             left = ast.BinaryOp(left, op, self._not())
         return left
