@@ -136,3 +136,14 @@ def test_tepi_komentar_blok_berisi_bintang_dan_baris_baru():
     sql = "/* komentar * dengan * bintang \n dan baris baru **/ SELECT 1;"
     toks = tokenize(sql)
     assert toks[0].value == "SELECT" and toks[0].line == 2
+
+def test_tepi_kolom_tanpa_qualifier_ambigu_dua_tabel():
+    """Kasus tepi: kolom tanpa qualifier pada query dengan 2 tabel (JOIN)
+    wajib menghasilkan warning 'ambigu tanpa skema' dan resolved tetap None.
+    Risiko: resolver salah menebak atau mengabaikan ambiguitas."""
+    script = parse_sql("SELECT id FROM pelanggan p JOIN pesanan o ON p.id = o.pelanggan_id;")
+    diags = Resolver().resolve_script(script)
+    col = [c for c in ast.iter_nodes(script.statements[0])
+           if isinstance(c, ast.ColumnRef) and c.qualifier is None][0]
+    assert col.resolved is None
+    assert any("ambigu tanpa skema" in d.message for d in diags)
