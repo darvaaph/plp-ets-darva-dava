@@ -8,6 +8,8 @@ Isi dengan:
 import pytest
 from crud.lexer import TokenType as T, tokenize
 from crud.parser import parse_sql
+from crud import ast_nodes as ast
+from crud.resolver import Resolver
 
 def test_regresi_bug1_keyword_huruf_kecil():
     toks = tokenize("select id from t where aktif = 1")
@@ -35,6 +37,35 @@ def test_tepi_campuran_and_or_urutan_terbalik():
     script = parse_sql("SELECT id FROM t WHERE a = 1 AND b = 2 OR c = 3;")
     where = script.statements[0].where
     assert where.op == "OR" and where.left.op == "AND" and where.right.op == "="
+    
+def test_regresi_bug4_alias_delete_tidak_bocor():
+    """SPESIFIKASI.md 4.5: scope DELETE harus ditutup sebelum statement berikutnya.
+
+    Sebelum perbaikan, 's.id' di SELECT kedua salah resolve ke 'sesi' warisan
+    DELETE dan tidak ada diagnostic sama sekali.
+    """
+    script = parse_sql("DELETE FROM sesi s WHERE s.id = 1; SELECT s.id FROM pengguna u;")
+    assert script.errors == []
+    diags = Resolver().resolve_script(script)
+    second = [c for c in ast.iter_nodes(script.statements[1])
+              if isinstance(c, ast.ColumnRef)]
+    assert second[0].resolved is None
+    assert [d.level for d in diags] == ["error"]
+    assert "'s'" in diags[0].message
+    
+def test_tepi_delete_dengan_subquery_tetap_resolve_alias_luar():
+    """Kasus tepi: subquery di WHERE membuka/menutup scope sendiri, lalu alias
+    DELETE harus tetap terlihat sesudahnya. Risiko: _pop() diletakkan terlalu awal."""
+    script = parse_sql(
+        "DELETE FROM sesi s "
+        "WHERE s.id IN (SELECT p.sesi_id FROM pengguna p) AND s.aktif = 0;")
+    diags = Resolver().resolve_script(script)
+    cols = {(c.qualifier, c.name): c.resolved
+            for c in ast.iter_nodes(script) if isinstance(c, ast.ColumnRef)}
+    assert cols[("s", "id")] == "sesi"
+    assert cols[("p", "sesi_id")] == "pengguna"
+    assert cols[("s", "aktif")] == "sesi"
+    assert diags == []
 
 def test_regresi_bug5_operator_tidak_sama_dengan():
     toks = tokenize("SELECT id FROM t WHERE a <> 1")

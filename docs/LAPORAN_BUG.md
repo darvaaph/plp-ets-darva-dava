@@ -88,7 +88,7 @@ Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.2 
 
 ## Bug 4: Nama Alias dari DELETE Masih Nyangkut ke Query Berikutnya
 
-**Ditemukan oleh:** Darva
+**Ditemukan oleh:** Darva · **Diperbaiki oleh:** Dava
 
 **Gejala.** Pada file `data/sample/audit.sql` baris 16 ada perintah `DELETE FROM sesi s` dan di baris 18 ada `SELECT s.id FROM pengguna u`. Kolom `s.id` pada query kedua malah dianggap merujuk ke tabel `sesi` milik query pertama. Padahal menurut SPESIFIKASI.md Bagian 4.5, setiap statement harus berdiri sendiri dan alias dari query sebelumnya tidak boleh bocor ke query berikutnya.
 
@@ -106,7 +106,11 @@ SELECT s.id FROM pengguna u;
 
 Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.3 A Resolver Class)**, setiap kali kita membuka scope (`_push`), kita wajib menutupnya kembali (`_pop`) begitu blok selesai agar variabel di dalamnya tidak bocor keluar.
 
-**Peran AI.** AI membantu menemukan bahwa fungsi `_delete()` tidak memiliki pemanggilan `_pop()`. Kami memverifikasinya dengan membandingkannya dengan fungsi `_update()` yang sudah memiliki `self._pop()`.
+**Perbaikan.** Di file `crud/resolver.py` pada fungsi `_delete()`, kami menambahkan pemanggilan `self._pop()` setelah `self._expr(dele.where)`. Posisinya di akhir agar ekspresi `WHERE` masih dapat merujuk alias target `DELETE` (misalnya `s.id`), lalu scope ditutup sebelum statement berikutnya diproses. Alternatif mereset `self.scope = None` di `resolve_script()` kami tolak karena hanya menambal gejala dan menyembunyikan ketidakseimbangan `_push()`/`_pop()`.
+
+**Test regresi.** `test_regresi_bug4_alias_delete_tidak_bocor` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membantu menemukan bahwa fungsi `_delete()` tidak memiliki pemanggilan `_pop()`. Kami memverifikasinya dengan membandingkan `_delete()` dengan `_update()` yang sudah memiliki `self._pop()`, lalu menjalankan test regresi sampai lulus.
 
 ---
 
