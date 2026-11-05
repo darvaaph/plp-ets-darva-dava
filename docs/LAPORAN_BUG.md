@@ -241,3 +241,32 @@ Aturan ini mengacu pada aturan proyek di SPESIFIKASI.md Bagian 5 (tabel aturan C
 
 **Peran AI.** AI membandingkan penanganan `UPDATE` dan `DELETE` di `analyzer.py` dan menunjukkan perbedaan operasi yang dikirim ke `_collect()`. Kami memverifikasinya dengan menjalankan `analyze_statement()` pada query tersebut dan test regresinya sampai lulus.
 
+
+
+---
+
+## Bug 9: Kata Kunci Opsional OUTER Pada LEFT OUTER JOIN Menyebabkan ParseError
+
+**Ditemukan oleh:** Darva · **Diperbaiki oleh:** Darva
+
+**Gejala.** Saat mengekstraksi file contoh `data/sample/pemeliharaan.sql`, query pertama pada baris 3–6 (`select c.id, c.nama, a.kota from crm.pelanggan c left outer join crm.alamat a on a.pelanggan_id = c.id where c.aktif = 1;`) gagal di-parse dengan pesan error `ParseError: Baris 5, kolom 6: diharapkan JOIN, ditemukan 'OUTER'`. Akibatnya parser masuk ke *panic mode* dan membuang statement tersebut, sehingga tabel `crm.pelanggan` dan `crm.alamat` hilang dari matriks CRUD. Padahal menurut SPESIFIKASI.md Bagian 3, aturan tata bahasa join mengizinkan kata kunci `OUTER` secara opsional setelah `LEFT`: `join = [ "INNER" | "LEFT" [ "OUTER" ] ] "JOIN" table_ref "ON" expr ;`.
+
+**Reproduksi minimal.**
+
+```sql
+SELECT c.id FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;
+```
+
+```powershell
+python -c "from crud.pipeline import analyze_source; print(analyze_source('SELECT c.id FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;'))"
+```
+
+**Akar masalah.** Di file `crud/parser.py` pada fungsi `_join()`, parser mengecek kata kunci `LEFT` dengan `elif self._match_kw("LEFT"): kind = "LEFT"`, tetapi langsung melanjutkan ke `self._expect_kw("JOIN")` tanpa mengecek kemungkinan adanya kata kunci opsional `OUTER`.
+
+Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, setiap fungsi pada parser turunan rekursif merepresentasikan aturan produksi tata bahasa. Jika sebuah aturan memiliki klausa opsional seperti `[ "OUTER" ]`, parser wajib mengonsumsi token tersebut secara kondisional menggunakan fungsi *match* sebelum menuntut token wajib berikutnya (`JOIN`). Karena token opsional `OUTER` dilewati, parser mendapati token `OUTER` padahal yang diekspektasikan adalah `JOIN`, sehingga terjadi `ParseError`.
+
+**Perbaikan.** Di file `crud/parser.py` pada fungsi `_join()`, setelah menetapkan `kind = "LEFT"`, kami menambahkan pengecekan `self._match_kw("OUTER")`. Jika kata `OUTER` ditemukan, token tersebut dikonsumsi; jika tidak ada (hanya `LEFT JOIN`), parser tetap berjalan normal menuju `self._expect_kw("JOIN")`. Alternatif mengabaikan kata `OUTER` di lexer kami tolak karena `OUTER` merupakan kata kunci SQL yang sah dan bernilai semantik di dalam tata bahasa.
+
+**Test regresi.** `test_regresi_bug9_left_outer_join` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membantu mengidentifikasi kegagalan parse saat menguji file `data/sample/pemeliharaan.sql` dan menunjukkan bahwa `_join()` lupa mengonsumsi kata kunci opsional `OUTER`. Kami memverifikasinya dengan mencocokkan tata bahasa EBNF pada SPESIFIKASI.md Bagian 3 dan merancang test regresi di `tests/test_tambahan.py`.
