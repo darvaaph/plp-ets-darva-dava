@@ -147,3 +147,16 @@ def test_tepi_kolom_tanpa_qualifier_ambigu_dua_tabel():
            if isinstance(c, ast.ColumnRef) and c.qualifier is None][0]
     assert col.resolved is None
     assert any("ambigu tanpa skema" in d.message for d in diags)
+
+def test_regresi_bug9_left_outer_join():
+    """SPESIFIKASI.md Bagian 3: join = [ "INNER" | "LEFT" [ "OUTER" ] ] "JOIN" ...
+    Kata kunci OUTER bersifat opsional setelah LEFT dan tidak boleh menyebabkan ParseError.
+    """
+    sql = "SELECT c.id, a.kota FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;"
+    script = parse_sql(sql)
+    assert script.errors == [], script.errors
+    stmt = script.statements[0]
+    assert len(stmt.joins) == 1
+    assert stmt.joins[0].kind == "LEFT"
+    assert stmt.joins[0].source.name == "crm.alamat"
+    assert stmt.joins[0].source.alias == "a"
