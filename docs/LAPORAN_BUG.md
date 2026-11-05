@@ -208,7 +208,7 @@ Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 1
 
 ## Bug 8: Subquery di UPDATE Dikasih Operasi U, Harusnya R
 
-**Ditemukan oleh:** Dava
+**Ditemukan oleh:** Dava · **Diperbaiki oleh:** Dava
 
 **Gejala.** SPESIFIKASI.md Bagian 5 menegaskan bahwa membaca tabel lewat subquery selalu menghasilkan operasi `R`. Namun pada query `UPDATE pesanan SET status = 'BATAL' WHERE pelanggan_id IN (SELECT id FROM pelanggan WHERE diblokir = 1);`, tabel `pelanggan` di dalam subquery malah ikut diberi operasi `U` (`{'pesanan': {'U'}, 'pelanggan': {'U'}}`), bukan `R`.
 
@@ -234,4 +234,8 @@ seharusnya                        : {'pesanan': {'U'}, 'pelanggan': {'R'}}
 
 Aturan ini mengacu pada aturan proyek di SPESIFIKASI.md Bagian 5 (tabel aturan CRUD).
 
-**Peran AI.** AI membandingkan penanganan `UPDATE` dan `DELETE` di `analyzer.py` dan menunjukkan perbedaan operasi yang dikirim ke `_collect`. Kami memverifikasinya dengan menjalankan fungsi analyzer pada query tersebut.
+**Perbaikan.** Di file `crud/analyzer.py` pada fungsi `analyze_statement()`, kami mengubah operasi yang diteruskan ke `_collect()` untuk `UPDATE` dari `"U"` menjadi `"R"`, baik pada `assignment.value` (subquery di `SET`) maupun `stmt.where`. Target `UPDATE` tetap ditandai `"U"` oleh `usage[stmt.table.name].add("U")`, sehingga hanya tabel yang dibaca lewat subquery yang berubah menjadi `R`. Alternatif menambahkan parameter khusus subquery pada `_collect()` kami tolak karena seluruh tabel yang ditemukan fungsi itu di dalam ekspresi `SET`/`WHERE` memang hanya berasal dari subquery, jadi cukup satu nilai argumen.
+
+**Test regresi.** `test_regresi_bug8_subquery_update_dibaca_bukan_diubah` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membandingkan penanganan `UPDATE` dan `DELETE` di `analyzer.py` dan menunjukkan perbedaan operasi yang dikirim ke `_collect()`. Kami memverifikasinya dengan menjalankan `analyze_statement()` pada query tersebut dan test regresinya sampai lulus.
