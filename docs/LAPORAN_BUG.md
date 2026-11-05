@@ -24,7 +24,7 @@ Sesuai penjelasan di **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.
 
 ---
 
-## Bug 2: Tanda Kutip Ganda di Dalam Teks String Terpotong
+## Bug 2: Karakter Escape Dua Kutip Tunggal ('') di Dalam String Terpotong.
 
 **Ditemukan oleh:** Darva
 
