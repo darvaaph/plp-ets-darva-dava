@@ -6,12 +6,16 @@ Isi dengan:
 2. Lima test kasus tepi, masing-masing dengan komentar singkat mengapa kasus itu berisiko.
 """
 import pytest
+from pathlib import Path
 from crud.lexer import TokenType as T, tokenize
 from crud.parser import parse_sql
 from crud import ast_nodes as ast
 from crud.resolver import Resolver
 from crud.analyzer import analyze_statement, column_usage
 from crud.cli import main
+from crud.pipeline import analyze_source
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "sample"
 
 
 def test_regresi_bug1_keyword_huruf_kecil():
@@ -260,3 +264,40 @@ def test_tepi_column_usage_lengkap_semua_statement():
     assert cols_del == {
         ("sesi", "kedaluwarsa", "R"),
     }
+
+
+def test_tepi_integrasi_file_sample_pemeliharaan_dan_error():
+    """Kasus tepi integrasi: memproses data/sample/pemeliharaan.sql dan
+    data/sample/campuran_error.sql secara end-to-end melalui analyze_source().
+
+    Risiko:
+    1. pemeliharaan.sql menguji interaksi simultan komentar blok multi-baris berisi
+       keyword SQL, nama tabel berskema crm.*, LEFT OUTER JOIN, string escape O'Brien,
+       INSERT INTO ... SELECT, dan DELETE dengan subquery NOT IN. Jika salah satu pass
+       tidak sinkron, seluruh statement bisa terbuang.
+    2. campuran_error.sql menguji error recovery (panic mode): statement ke-2 error,
+       namun statement 1, 3, dan 4 harus tetap diproses tanpa menghentikan ekstraksi.
+    """
+    # 1. Uji pemeliharaan.sql (semua statement valid, skema crm.* lengkap)
+    res_pem = analyze_source((DATA_DIR / "pemeliharaan.sql").read_text(encoding="utf-8"))
+    assert res_pem.lex_error is None
+    assert res_pem.parse_errors == []
+    assert res_pem.diagnostics == []
+    assert len(res_pem.statements) == 4
+    assert res_pem.matrix() == {
+        "crm.alamat": "RD",
+        "crm.log_perubahan": "C",
+        "crm.pelanggan": "RU",
+    }
+
+    # 2. Uji campuran_error.sql (statement 2 gagal, statement 1, 3, 4 selamat)
+    res_err = analyze_source((DATA_DIR / "campuran_error.sql").read_text(encoding="utf-8"))
+    assert res_err.lex_error is None
+    assert len(res_err.parse_errors) == 1
+    assert len(res_err.statements) == 3
+    assert res_err.matrix() == {
+        "keranjang": "D",
+        "pelanggan": "R",
+        "produk": "U",
+    }
+
