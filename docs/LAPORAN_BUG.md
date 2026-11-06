@@ -270,3 +270,67 @@ Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 
 **Test regresi.** `test_regresi_bug9_left_outer_join` di `tests/test_tambahan.py`.
 
 **Peran AI.** AI membantu mengidentifikasi kegagalan parse saat menguji file `data/sample/pemeliharaan.sql` dan menunjukkan bahwa `_join()` lupa mengonsumsi kata kunci opsional `OUTER`. Kami memverifikasinya dengan mencocokkan tata bahasa EBNF pada SPESIFIKASI.md Bagian 3 dan merancang test regresi di `tests/test_tambahan.py`.
+
+---
+
+## Bug 10: Subquery SELECT Bertanda Kurung pada INSERT INTO ... (SELECT ...) Menyebabkan ParseError
+
+**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** (Belum diperbaiki / Tahap Analisis)
+
+**Gejala.** Saat query `INSERT INTO` memakai subquery `SELECT` yang diapit tanda kurung `(...)` baik tanpa daftar kolom (misalnya `INSERT INTO arsip (SELECT id, total FROM pesanan);`) maupun dengan daftar kolom (misalnya `INSERT INTO arsip (id, total) (SELECT id, total FROM pesanan);`), parser gagal memproses query dan memicu error `ParseError: Baris 1, kolom 19: diharapkan VALUES atau SELECT, ditemukan '('`. Akibatnya, statement valid ini dibuang oleh parser melalui mekanisme *panic mode*, sehingga tabel target dan tabel sumber tidak tercatat pada matriks CRUD.
+
+**Reproduksi minimal.**
+
+```sql
+INSERT INTO arsip (SELECT id, total FROM pesanan);
+```
+
+```powershell
+python -c "from crud.parser import parse_sql; print(parse_sql('INSERT INTO arsip (SELECT id, total FROM pesanan);'))"
+```
+
+**Akar masalah.** Di file `crud/parser.py` pada fungsi `_insert()`, baris `if self._check(T.LPAREN) and not self._next_is_select():` sengaja dirancang agar kurung buka `(` tidak dibaca sebagai daftar kolom bila diikuti kata kunci `SELECT`. Akan tetapi, parser hanya melompati blok pembacaan kolom tanpa mengonsumsi karakter `(` tersebut. Akibatnya, saat eksekusi berlanjut ke baris `if self._check_kw("SELECT"):`, token saat ini masih berupa kurung buka `(` (`T.LPAREN`), sehingga pengecekan gagal dan parser terlempar ke klausa error `raise ParseError("diharapkan VALUES atau SELECT", self._peek())`.
+
+Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, parser turunan rekursif harus mengonsumsi token pembatas (*delimiters/enclosures*) secara simetris dan konsisten. Jika sebuah produksi tata bahasa mengizinkan bentuk bertanda kurung (*parenthesized subclause*), parser wajib mengonsumsi token kurung buka `(` terlebih dahulu sebelum memanggil fungsi aturan di dalamnya (`_select()`), serta memastikan token kurung tutup `)` dikonsumsi secara seimbang di akhir aturan tersebut.
+
+**Perbaikan.** (Rencana perbaikan) Di file `crud/parser.py` pada fungsi `_insert()`, sebelum memproses query `SELECT`, parser perlu memeriksa dan mengonsumsi kurung buka opsional dengan `parenthesized = self._match(T.LPAREN) is not None`. Jika tanda kurung ada, parser memanggil `query = self._select()` lalu menuntut kurung penutup dengan `self._expect(T.RPAREN, "')' penutup subquery")`. Jika tidak ada tanda kurung (bentuk lurus `INSERT INTO t SELECT ...`), parser langsung memanggil `query = self._select()`. Alternatif membuang kondisi `and not self._next_is_select()` ditolak karena akan membuat `(SELECT ...)` keliru dibaca sebagai daftar kolom.
+
+**Test regresi.** `test_regresi_bug10_insert_select_berkurung` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membantu menganalisis alur token pada fungsi `_insert()` saat kami melakukan audit menyeluruh terhadap variasi penulisan query di luar *happy path*, lalu menunjukkan bahwa karakter `(` tertahan tanpa dikonsumsi akibat kondisi `not self._next_is_select()`. Darva dan Dava bersama-sama memverifikasi temuan ini dengan mereproduksi error di terminal Python dan menelusuri eksekusi token di parser.
+
+---
+
+## Bug 11: Diagnostic Resolver Tingkat 'Error' Menghasilkan Exit Code 0 (Status Sukses Palsu) di CLI
+
+**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** (Belum diperbaiki / Tahap Analisis)
+
+**Gejala.** Saat antarmuka baris perintah (`crud.cli`) dijalankan pada file SQL yang mengandung kesalahan semantik pada tahap resolusi (contohnya pada `data/sample/audit.sql` baris 18 yang memuat alias tidak terdefinisi: `SELECT s.id FROM pengguna u`), CLI memang mencetak pesan kesalahan ke `stderr`, namun proses CLI selesai dengan status keberhasilan (*exit code*) bernilai `0`. Akibatnya, lingkungan eksekusi (seperti terminal PowerShell, skrip bash CI/CD, atau *test runner* otomatis) menganggap proses berjalan sukses tanpa galat, padahal terdapat kesalahan fatal pada file tersebut.
+
+**Reproduksi minimal.**
+
+```sql
+-- File berisi alias tidak terdefinisi (seperti data/sample/audit.sql baris 18)
+SELECT s.id FROM pengguna u WHERE u.aktif = 1;
+```
+
+```powershell
+python -m crud.cli data/sample/audit.sql
+echo $LASTEXITCODE
+```
+Nilai `$LASTEXITCODE` yang keluar adalah `0` (seharusnya `1`).
+
+**Akar masalah.** Di file `crud/cli.py` pada fungsi `main()`, penanda kesalahan `had_error = False` hanya diubah menjadi `True` saat mendeteksi `res.lex_error` atau `res.parse_errors`. Pada perulangan diagnostik resolver:
+```python
+for diag in res.diagnostics:
+    print(f"{path.name}: {diag}", file=sys.stderr)
+```
+Kode hanya mencetak teks diagnostik tanpa memeriksa apakah tingkat keparahannya bernilai `diag.level == "error"`. Akibatnya, pada akhir fungsi `main()`, baris `return 1 if had_error else 0` tetap mengembalikan `0` karena `had_error` masih bernilai `False`.
+
+Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.1 Static Scope & 11.3 A Resolver Class)** serta standar rekayasa perangkat lunak, pass resolusi semantik merupakan tahap validasi krusial yang setara dengan tahap scanning dan parsing. Apabila sebuah pass semantik menemukan pelanggaran fatal (*semantic error* seperti referensi variabel/alias tak dikenal), lingkungan pemroses (*driver/CLI*) wajib menandai status proses sebagai gagal (*error exit status non-zero*) agar pipeline otomatisasi tidak menganggap input yang salah sebagai input yang valid.
+
+**Perbaikan.** (Rencana perbaikan) Di file `crud/cli.py` pada loop `for diag in res.diagnostics:`, tambahkan pemeriksaan tingkat keparahan: bila `diag.level == "error"`, maka ubah `had_error = True`. Diagnostik bertaraf `"warning"` (seperti kolom ambigu atau subquery tanpa alias) tetap dibiarkan tanpa mengubah `had_error` agar peringatan tidak membatalkan eksekusi normal.
+
+**Test regresi.** `test_regresi_bug11_cli_exit_code_error_resolver` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI menunjukkan inkonsistensi perilaku CLI yang tidak mengecek properti `level` pada list `diagnostics`, sehingga status proses tetap `0` meskipun terdapat error semantik. Darva dan Dava bersama-sama memverifikasi temuan ini dengan menguji perintah CLI pada file `data/sample/audit.sql` di terminal PowerShell dan memeriksa isi variabel `$LASTEXITCODE`.
