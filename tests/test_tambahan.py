@@ -10,7 +10,7 @@ from crud.lexer import TokenType as T, tokenize
 from crud.parser import parse_sql
 from crud import ast_nodes as ast
 from crud.resolver import Resolver
-from crud.analyzer import analyze_statement
+from crud.analyzer import analyze_statement, column_usage
 from crud.cli import main
 
 
@@ -208,3 +208,55 @@ def test_tepi_cli_warning_tetap_exit_code_nol(tmp_path):
     path.write_text("SELECT nama FROM pelanggan p, pesanan o;", encoding="utf-8")
     code = main([str(path), "--out", str(tmp_path / "matrix.csv")])
     assert code == 0
+
+
+def test_tepi_column_usage_lengkap_semua_statement():
+    """Kasus tepi: API publik column_usage(stmt) wajib mengembalikan triple
+    (tabel, kolom, operasi) untuk seluruh jenis statement (SELECT, INSERT, UPDATE, DELETE)
+    sesuai SPESIFIKASI.md bagian 7 dan 8.
+
+    Risiko: jika resolver belum dijalankan atau ada node ekspresi yang terlewat,
+    triple kolom yang dihasilkan tidak lengkap atau kolom tidak teresolusi.
+    """
+    # 1. SELECT dengan JOIN dan WHERE
+    script_sel = parse_sql(
+        "SELECT p.nama, o.total FROM pelanggan p JOIN pesanan o "
+        "ON p.id = o.pelanggan_id WHERE p.aktif = 1;")
+    Resolver().resolve_script(script_sel)
+    cols_sel = column_usage(script_sel.statements[0])
+    assert cols_sel == {
+        ("pelanggan", "nama", "R"),
+        ("pesanan", "total", "R"),
+        ("pelanggan", "id", "R"),
+        ("pesanan", "pelanggan_id", "R"),
+        ("pelanggan", "aktif", "R"),
+    }
+
+    # 2. INSERT ... VALUES (kolom target adalah C)
+    script_ins = parse_sql("INSERT INTO log (user_id, aksi) VALUES (1, 'login');")
+    Resolver().resolve_script(script_ins)
+    cols_ins = column_usage(script_ins.statements[0])
+    assert cols_ins == {
+        ("log", "user_id", "C"),
+        ("log", "aksi", "C"),
+    }
+
+    # 3. UPDATE (kolom assignment adalah U, kolom di ekspresi & WHERE adalah R)
+    script_upd = parse_sql(
+        "UPDATE produk SET stok = stok - 1 WHERE id = 10 AND status = 'aktif';")
+    Resolver().resolve_script(script_upd)
+    cols_upd = column_usage(script_upd.statements[0])
+    assert cols_upd == {
+        ("produk", "stok", "U"),
+        ("produk", "stok", "R"),
+        ("produk", "id", "R"),
+        ("produk", "status", "R"),
+    }
+
+    # 4. DELETE (kolom di WHERE adalah R)
+    script_del = parse_sql("DELETE FROM sesi s WHERE s.kedaluwarsa < 1000;")
+    Resolver().resolve_script(script_del)
+    cols_del = column_usage(script_del.statements[0])
+    assert cols_del == {
+        ("sesi", "kedaluwarsa", "R"),
+    }
