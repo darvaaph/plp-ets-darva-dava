@@ -6,11 +6,16 @@ Isi dengan:
 2. Lima test kasus tepi, masing-masing dengan komentar singkat mengapa kasus itu berisiko.
 """
 import pytest
+from pathlib import Path
 from crud.lexer import TokenType as T, tokenize
 from crud.parser import parse_sql
 from crud import ast_nodes as ast
 from crud.resolver import Resolver
-from crud.analyzer import analyze_statement
+from crud.analyzer import analyze_statement, column_usage
+from crud.cli import main
+from crud.pipeline import analyze_source
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "sample"
 
 
 def test_regresi_bug1_keyword_huruf_kecil():
@@ -129,3 +134,217 @@ def test_tepi_subquery_di_set_update_dibaca():
     assert script.errors == []
     assert analyze_statement(script.statements[0]) == {
         "pesanan": {"U"}, "arsip": {"R"}}
+
+def test_tepi_komentar_blok_berisi_bintang_dan_baris_baru():
+    """Kasus tepi: komentar blok multi-baris yang memuat karakter '*' di dalamnya
+    tidak boleh salah dianggap sebagai penutup komentar. Risiko: komentar tertutup prematur."""
+    sql = "/* komentar * dengan * bintang \n dan baris baru **/ SELECT 1;"
+    toks = tokenize(sql)
+    assert toks[0].value == "SELECT" and toks[0].line == 2
+
+def test_tepi_kolom_tanpa_qualifier_ambigu_dua_tabel():
+    """Kasus tepi: kolom tanpa qualifier pada query dengan 2 tabel (JOIN)
+    wajib menghasilkan warning 'ambigu tanpa skema' dan resolved tetap None.
+    Risiko: resolver salah menebak atau mengabaikan ambiguitas."""
+    script = parse_sql("SELECT id FROM pelanggan p JOIN pesanan o ON p.id = o.pelanggan_id;")
+    diags = Resolver().resolve_script(script)
+    col = [c for c in ast.iter_nodes(script.statements[0])
+           if isinstance(c, ast.ColumnRef) and c.qualifier is None][0]
+    assert col.resolved is None
+    assert any("ambigu tanpa skema" in d.message for d in diags)
+
+def test_regresi_bug9_left_outer_join():
+    """SPESIFIKASI.md Bagian 3: join = [ "INNER" | "LEFT" [ "OUTER" ] ] "JOIN" ...
+    Kata kunci OUTER bersifat opsional setelah LEFT dan tidak boleh menyebabkan ParseError.
+    """
+    sql = "SELECT c.id, a.kota FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;"
+    script = parse_sql(sql)
+    assert script.errors == [], script.errors
+    stmt = script.statements[0]
+    assert len(stmt.joins) == 1
+    assert stmt.joins[0].kind == "LEFT"
+    assert stmt.joins[0].source.name == "crm.alamat"
+    assert stmt.joins[0].source.alias == "a"
+    
+def test_regresi_bug10_insert_select_berkurung():
+    """SPESIFIKASI.md 3: INSERT ... (SELECT ...) adalah bentuk sah.
+
+    Sebelum perbaikan, token '(' tertinggal sehingga parser melempar
+    ParseError 'diharapkan VALUES atau SELECT, ditemukan '('.
+    """
+    script = parse_sql("INSERT INTO arsip (SELECT id, total FROM pesanan);")
+    assert script.errors == []
+    stmt = script.statements[0]
+    assert stmt.columns == []
+    assert stmt.query is not None
+
+
+def test_regresi_bug10_insert_select_berkurung_dengan_kolom():
+    """Varian kedua: kurung daftar kolom diikuti kurung subquery.
+
+    Risiko: '(' kedua bisa dikira awal daftar kolom lagi.
+    """
+    script = parse_sql("INSERT INTO arsip (id, total) (SELECT id, total FROM pesanan);")
+    assert script.errors == []
+    stmt = script.statements[0]
+    assert stmt.columns == ["id", "total"]
+    assert stmt.query is not None
+
+def test_regresi_bug11_cli_error_resolver_exit_code(tmp_path, capsys):
+    """Error resolver harus membuat CLI keluar dengan kode 1.
+
+    Sebelum perbaikan, diagnostik hanya dicetak ke stderr dan main()
+    tetap mengembalikan 0.
+    """
+    path = tmp_path / "alias_salah.sql"
+    path.write_text("SELECT s.id FROM pengguna u;", encoding="utf-8")
+    code = main([str(path), "--out", str(tmp_path / "matrix.csv")])
+    assert code == 1
+    assert "tidak terdefinisi" in capsys.readouterr().err
+
+
+def test_tepi_cli_warning_tetap_exit_code_nol(tmp_path):
+    """Kasus tepi: warning ambigu bukan error fatal.
+
+    Risiko: perbaikan terlalu kasar dengan menganggap semua diagnostics gagal.
+    """
+    path = tmp_path / "ambigu.sql"
+    path.write_text("SELECT nama FROM pelanggan p, pesanan o;", encoding="utf-8")
+    code = main([str(path), "--out", str(tmp_path / "matrix.csv")])
+    assert code == 0
+
+
+def test_tepi_column_usage_lengkap_semua_statement():
+    """Kasus tepi: API publik column_usage(stmt) wajib mengembalikan triple
+    (tabel, kolom, operasi) untuk seluruh jenis statement (SELECT, INSERT, UPDATE, DELETE)
+    sesuai SPESIFIKASI.md bagian 7 dan 8.
+
+    Risiko: jika resolver belum dijalankan atau ada node ekspresi yang terlewat,
+    triple kolom yang dihasilkan tidak lengkap atau kolom tidak teresolusi.
+    """
+    # 1. SELECT dengan JOIN dan WHERE
+    script_sel = parse_sql(
+        "SELECT p.nama, o.total FROM pelanggan p JOIN pesanan o "
+        "ON p.id = o.pelanggan_id WHERE p.aktif = 1;")
+    Resolver().resolve_script(script_sel)
+    cols_sel = column_usage(script_sel.statements[0])
+    assert cols_sel == {
+        ("pelanggan", "nama", "R"),
+        ("pesanan", "total", "R"),
+        ("pelanggan", "id", "R"),
+        ("pesanan", "pelanggan_id", "R"),
+        ("pelanggan", "aktif", "R"),
+    }
+
+    # 2. INSERT ... VALUES (kolom target adalah C)
+    script_ins = parse_sql("INSERT INTO log (user_id, aksi) VALUES (1, 'login');")
+    Resolver().resolve_script(script_ins)
+    cols_ins = column_usage(script_ins.statements[0])
+    assert cols_ins == {
+        ("log", "user_id", "C"),
+        ("log", "aksi", "C"),
+    }
+
+    # 3. UPDATE (kolom assignment adalah U, kolom di ekspresi & WHERE adalah R)
+    script_upd = parse_sql(
+        "UPDATE produk SET stok = stok - 1 WHERE id = 10 AND status = 'aktif';")
+    Resolver().resolve_script(script_upd)
+    cols_upd = column_usage(script_upd.statements[0])
+    assert cols_upd == {
+        ("produk", "stok", "U"),
+        ("produk", "stok", "R"),
+        ("produk", "id", "R"),
+        ("produk", "status", "R"),
+    }
+
+    # 4. DELETE (kolom di WHERE adalah R)
+    script_del = parse_sql("DELETE FROM sesi s WHERE s.kedaluwarsa < 1000;")
+    Resolver().resolve_script(script_del)
+    cols_del = column_usage(script_del.statements[0])
+    assert cols_del == {
+        ("sesi", "kedaluwarsa", "R"),
+    }
+
+
+def test_tepi_integrasi_file_sample_pemeliharaan_dan_error():
+    """Kasus tepi integrasi: memproses data/sample/pemeliharaan.sql dan
+    data/sample/campuran_error.sql secara end-to-end melalui analyze_source().
+
+    Risiko:
+    1. pemeliharaan.sql menguji interaksi simultan komentar blok multi-baris berisi
+       keyword SQL, nama tabel berskema crm.*, LEFT OUTER JOIN, string escape O'Brien,
+       INSERT INTO ... SELECT, dan DELETE dengan subquery NOT IN. Jika salah satu pass
+       tidak sinkron, seluruh statement bisa terbuang.
+    2. campuran_error.sql menguji error recovery (panic mode): statement ke-2 error,
+       namun statement 1, 3, dan 4 harus tetap diproses tanpa menghentikan ekstraksi.
+    """
+    # 1. Uji pemeliharaan.sql (semua statement valid, skema crm.* lengkap)
+    res_pem = analyze_source((DATA_DIR / "pemeliharaan.sql").read_text(encoding="utf-8"))
+    assert res_pem.lex_error is None
+    assert res_pem.parse_errors == []
+    assert res_pem.diagnostics == []
+    assert len(res_pem.statements) == 4
+    assert res_pem.matrix() == {
+        "crm.alamat": "RD",
+        "crm.log_perubahan": "C",
+        "crm.pelanggan": "RU",
+    }
+
+    # 2. Uji campuran_error.sql (statement 2 gagal, statement 1, 3, 4 selamat)
+    res_err = analyze_source((DATA_DIR / "campuran_error.sql").read_text(encoding="utf-8"))
+    assert res_err.lex_error is None
+    assert len(res_err.parse_errors) == 1
+    assert len(res_err.statements) == 3
+    assert res_err.matrix() == {
+        "keranjang": "D",
+        "pelanggan": "R",
+        "produk": "U",
+    }
+
+def test_tepi_cli_ekspor_detail_dan_kolom_csv(tmp_path):
+    """Kasus tepi antarmuka CLI: memverifikasi bahwa opsi flag --detail dan --kolom
+    menghasilkan file CSV dengan struktur header dan baris data yang tepat
+    sesuai SPESIFIKASI.md bagian 8.
+
+    Risiko: format CSV (header atau urutan kolom) salah ditulis atau tidak sinkron
+    dengan hasil statement/kolom saat diekspor lewat CLI.
+    """
+    import csv
+
+    sql_file = tmp_path / "transaksi.sql"
+    sql_file.write_text(
+        "SELECT p.nama FROM pelanggan p WHERE p.id = 1;\n"
+        "UPDATE produk SET stok = stok - 1 WHERE id = 10;\n",
+        encoding="utf-8"
+    )
+    out_matrix = tmp_path / "matrix.csv"
+    out_detail = tmp_path / "detail.csv"
+    out_kolom = tmp_path / "kolom.csv"
+
+    # Jalankan CLI dengan flag --detail dan --kolom
+    code = main([
+        str(sql_file),
+        "--out", str(out_matrix),
+        "--detail", str(out_detail),
+        "--kolom", str(out_kolom),
+    ])
+    assert code == 0
+
+    # 1. Verifikasi header dan baris file detail.csv
+    with out_detail.open(encoding="utf-8") as f:
+        detail_rows = list(csv.reader(f))
+    assert detail_rows[0] == ["file", "baris", "jenis", "tabel", "operasi"]
+    assert ["transaksi.sql", "1", "SELECT", "pelanggan", "R"] in detail_rows
+    assert ["transaksi.sql", "2", "UPDATE", "produk", "U"] in detail_rows
+
+    # 2. Verifikasi header dan baris file kolom.csv
+    with out_kolom.open(encoding="utf-8") as f:
+        kolom_rows = list(csv.reader(f))
+    assert kolom_rows[0] == ["file", "baris", "tabel", "kolom", "operasi"]
+    # Penggunaan kolom statement 1 (SELECT)
+    assert ["transaksi.sql", "1", "pelanggan", "id", "R"] in kolom_rows
+    assert ["transaksi.sql", "1", "pelanggan", "nama", "R"] in kolom_rows
+    # Penggunaan kolom statement 2 (UPDATE)
+    assert ["transaksi.sql", "2", "produk", "stok", "U"] in kolom_rows
+    assert ["transaksi.sql", "2", "produk", "stok", "R"] in kolom_rows
+    assert ["transaksi.sql", "2", "produk", "id", "R"] in kolom_rows

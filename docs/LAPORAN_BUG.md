@@ -241,3 +241,96 @@ Aturan ini mengacu pada aturan proyek di SPESIFIKASI.md Bagian 5 (tabel aturan C
 
 **Peran AI.** AI membandingkan penanganan `UPDATE` dan `DELETE` di `analyzer.py` dan menunjukkan perbedaan operasi yang dikirim ke `_collect()`. Kami memverifikasinya dengan menjalankan `analyze_statement()` pada query tersebut dan test regresinya sampai lulus.
 
+
+
+---
+
+## Bug 9: Kata Kunci Opsional OUTER Pada LEFT OUTER JOIN Menyebabkan ParseError
+
+**Ditemukan oleh:** Darva · **Diperbaiki oleh:** Darva
+
+**Gejala.** Saat mengekstraksi file contoh `data/sample/pemeliharaan.sql`, query pertama pada baris 3–6 (`select c.id, c.nama, a.kota from crm.pelanggan c left outer join crm.alamat a on a.pelanggan_id = c.id where c.aktif = 1;`) gagal di-parse dengan pesan error `ParseError: Baris 5, kolom 6: diharapkan JOIN, ditemukan 'OUTER'`. Akibatnya parser masuk ke *panic mode* dan membuang statement tersebut, sehingga tabel `crm.pelanggan` dan `crm.alamat` hilang dari matriks CRUD. Padahal menurut SPESIFIKASI.md Bagian 3, aturan tata bahasa join mengizinkan kata kunci `OUTER` secara opsional setelah `LEFT`: `join = [ "INNER" | "LEFT" [ "OUTER" ] ] "JOIN" table_ref "ON" expr ;`.
+
+**Reproduksi minimal.**
+
+```sql
+SELECT c.id FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;
+```
+
+```powershell
+python -c "from crud.pipeline import analyze_source; print(analyze_source('SELECT c.id FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;'))"
+```
+
+**Akar masalah.** Di file `crud/parser.py` pada fungsi `_join()`, parser mengecek kata kunci `LEFT` dengan `elif self._match_kw("LEFT"): kind = "LEFT"`, tetapi langsung melanjutkan ke `self._expect_kw("JOIN")` tanpa mengecek kemungkinan adanya kata kunci opsional `OUTER`.
+
+Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, setiap fungsi pada parser turunan rekursif merepresentasikan aturan produksi tata bahasa. Jika sebuah aturan memiliki klausa opsional seperti `[ "OUTER" ]`, parser wajib mengonsumsi token tersebut secara kondisional menggunakan fungsi *match* sebelum menuntut token wajib berikutnya (`JOIN`). Karena token opsional `OUTER` dilewati, parser mendapati token `OUTER` padahal yang diekspektasikan adalah `JOIN`, sehingga terjadi `ParseError`.
+
+**Perbaikan.** Di file `crud/parser.py` pada fungsi `_join()`, setelah menetapkan `kind = "LEFT"`, kami menambahkan pengecekan `self._match_kw("OUTER")`. Jika kata `OUTER` ditemukan, token tersebut dikonsumsi; jika tidak ada (hanya `LEFT JOIN`), parser tetap berjalan normal menuju `self._expect_kw("JOIN")`. Alternatif mengabaikan kata `OUTER` di lexer kami tolak karena `OUTER` merupakan kata kunci SQL yang sah dan bernilai semantik di dalam tata bahasa.
+
+**Test regresi.** `test_regresi_bug9_left_outer_join` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membantu mengidentifikasi kegagalan parse saat menguji file `data/sample/pemeliharaan.sql` dan menunjukkan bahwa `_join()` lupa mengonsumsi kata kunci opsional `OUTER`. Kami memverifikasinya dengan mencocokkan tata bahasa EBNF pada SPESIFIKASI.md Bagian 3 dan merancang test regresi di `tests/test_tambahan.py`.
+
+---
+
+## Bug 10: Subquery SELECT Bertanda Kurung pada INSERT INTO ... (SELECT ...) Menyebabkan ParseError
+
+**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** Dava
+
+**Gejala.** Saat query `INSERT INTO` memakai subquery `SELECT` yang diapit tanda kurung `(...)` baik tanpa daftar kolom (misalnya `INSERT INTO arsip (SELECT id, total FROM pesanan);`) maupun dengan daftar kolom (misalnya `INSERT INTO arsip (id, total) (SELECT id, total FROM pesanan);`), parser gagal memproses query dan memicu error `ParseError: Baris 1, kolom 19: diharapkan VALUES atau SELECT, ditemukan '('`. Akibatnya, statement valid ini dibuang oleh parser melalui mekanisme *panic mode*, sehingga tabel target dan tabel sumber tidak tercatat pada matriks CRUD.
+
+**Reproduksi minimal.**
+
+```sql
+INSERT INTO arsip (SELECT id, total FROM pesanan);
+```
+
+```powershell
+python -c "from crud.parser import parse_sql; print(parse_sql('INSERT INTO arsip (SELECT id, total FROM pesanan);'))"
+```
+
+**Akar masalah.** Di file `crud/parser.py` pada fungsi `_insert()`, baris `if self._check(T.LPAREN) and not self._next_is_select():` sengaja dirancang agar kurung buka `(` tidak dibaca sebagai daftar kolom bila diikuti kata kunci `SELECT`. Akan tetapi, parser hanya melompati blok pembacaan kolom tanpa mengonsumsi karakter `(` tersebut. Akibatnya, saat eksekusi berlanjut ke baris `if self._check_kw("SELECT"):`, token saat ini masih berupa kurung buka `(` (`T.LPAREN`), sehingga pengecekan gagal dan parser terlempar ke klausa error `raise ParseError("diharapkan VALUES atau SELECT", self._peek())`.
+
+Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, parser turunan rekursif harus mengonsumsi token pembatas (*delimiters/enclosures*) secara simetris dan konsisten. Jika sebuah produksi tata bahasa mengizinkan bentuk bertanda kurung (*parenthesized subclause*), parser wajib mengonsumsi token kurung buka `(` terlebih dahulu sebelum memanggil fungsi aturan di dalamnya (`_select()`), serta memastikan token kurung tutup `)` dikonsumsi secara seimbang di akhir aturan tersebut.
+
+**Perbaikan.** Di file `crud/parser.py` pada fungsi `_insert()`, kami menambahkan `parenthesized = self._check(T.LPAREN) and self._next_is_select()` sebelum pengecekan `SELECT`, lalu mengonsumsi token `(` dengan `self._advance()` bila bernilai benar. Setelah `query = self._select()` selesai, parser menuntut kurung penutup dengan `self._expect(T.RPAREN, "')' penutup subquery")`, sehingga `INSERT INTO arsip (SELECT ...)` maupun `INSERT INTO arsip (id, total) (SELECT ...)` keduanya sah untuk diparse. Bentuk tanpa kurung (`INSERT INTO t SELECT ...`) tidak berubah karena `parenthesized` bernilai `False`. Alternatif membuang kondisi `and not self._next_is_select()` pada pembacaan daftar kolom kami tolak karena `(SELECT ...)` bisa keliru dibaca sebagai daftar nama kolom.
+
+**Test regresi.** `test_regresi_bug10_insert_select_berkurung` dan `test_regresi_bug10_insert_select_berkurung_dengan_kolom` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI membantu menganalisis alur token pada fungsi `_insert()` saat kami melakukan audit menyeluruh terhadap variasi penulisan query di luar *happy path*, lalu menunjukkan bahwa karakter `(` tertahan tanpa dikonsumsi akibat kondisi `not self._next_is_select()`. Darva dan Dava bersama-sama memverifikasi temuan ini dengan mereproduksi error di terminal Python, menelusuri alur token di `_insert()`, dan menjalankan test regresinya sampai lulus.
+
+---
+
+## Bug 11: Diagnostic Resolver Tingkat 'Error' Menghasilkan Exit Code 0 (Status Sukses Palsu) di CLI
+
+**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** Dava
+
+**Gejala.** Saat antarmuka baris perintah (`crud.cli`) dijalankan pada file SQL yang mengandung kesalahan semantik pada tahap resolusi (contohnya pada `data/sample/audit.sql` baris 18 yang memuat alias tidak terdefinisi: `SELECT s.id FROM pengguna u`), CLI memang mencetak pesan kesalahan ke `stderr`, namun proses CLI selesai dengan status keberhasilan (*exit code*) bernilai `0`. Akibatnya, lingkungan eksekusi (seperti terminal PowerShell, skrip bash CI/CD, atau *test runner* otomatis) menganggap proses berjalan sukses tanpa galat, padahal terdapat kesalahan fatal pada file tersebut.
+
+**Reproduksi minimal.**
+
+```sql
+-- File berisi alias tidak terdefinisi (seperti data/sample/audit.sql baris 18)
+SELECT s.id FROM pengguna u WHERE u.aktif = 1;
+```
+
+```powershell
+python -m crud.cli data/sample/audit.sql
+echo $LASTEXITCODE
+```
+Nilai `$LASTEXITCODE` yang keluar adalah `0` (seharusnya `1`).
+
+**Akar masalah.** Di file `crud/cli.py` pada fungsi `main()`, penanda kesalahan `had_error = False` hanya diubah menjadi `True` saat mendeteksi `res.lex_error` atau `res.parse_errors`. Pada perulangan diagnostik resolver:
+```python
+for diag in res.diagnostics:
+    print(f"{path.name}: {diag}", file=sys.stderr)
+```
+Kode hanya mencetak teks diagnostik tanpa memeriksa apakah tingkat keparahannya bernilai `diag.level == "error"`. Akibatnya, pada akhir fungsi `main()`, baris `return 1 if had_error else 0` tetap mengembalikan `0` karena `had_error` masih bernilai `False`.
+
+Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.1 Static Scope & 11.3 A Resolver Class)** serta standar rekayasa perangkat lunak, pass resolusi semantik merupakan tahap validasi krusial yang setara dengan tahap scanning dan parsing. Apabila sebuah pass semantik menemukan pelanggaran fatal (*semantic error* seperti referensi variabel/alias tak dikenal), lingkungan pemroses (*driver/CLI*) wajib menandai status proses sebagai gagal (*error exit status non-zero*) agar pipeline otomatisasi tidak menganggap input yang salah sebagai input yang valid.
+
+**Perbaikan.** Di file `crud/cli.py` pada fungsi `main()`, di dalam perulangan `for diag in res.diagnostics:` kami menambahkan pemeriksaan `if diag.level == "error": had_error = True` sebelum diagnostik dicetak. Dengan begitu error semantik dari resolver membuat `main()` mengembalikan `1`, sedangkan diagnostik bertaraf `"warning"` (misalnya kolom ambigu atau subquery tanpa alias) tetap tidak mengubah exit code. Alternatif menganggap semua diagnostik sebagai error kami tolak karena warning bukan kegagalan fatal dan akan membuat file yang masih valid dianggap gagal.
+
+**Test regresi.** `test_regresi_bug11_cli_error_resolver_exit_code` dan `test_tepi_cli_warning_tetap_exit_code_nol` di `tests/test_tambahan.py`.
+
+**Peran AI.** AI menunjukkan inkonsistensi perilaku CLI yang tidak mengecek properti `level` pada list `diagnostics`, sehingga status proses tetap `0` meskipun terdapat error semantik. Darva dan Dava bersama-sama memverifikasi temuan ini dengan menguji perintah CLI pada file `data/sample/audit.sql` di terminal PowerShell, memeriksa isi variabel `$LASTEXITCODE`, dan menjalankan test regresinya sampai lulus.

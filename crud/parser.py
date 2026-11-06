@@ -177,6 +177,7 @@ class Parser:
             kind = "INNER"
         elif self._match_kw("LEFT"):
             kind = "LEFT"
+            self._match_kw("OUTER")
         self._expect_kw("JOIN")
         source = self._table_ref()
         self._expect_kw("ON")
@@ -210,9 +211,14 @@ class Parser:
             while self._match(T.COMMA):
                 rows.append(self._value_row())
             return ast.Insert(table, columns, rows, None, line=start.line)
+        parenthesized = self._check(T.LPAREN) and self._next_is_select()
+        if parenthesized:
+            self._advance()
         if self._check_kw("SELECT"):
-            # TODO(T1): dukung INSERT INTO ... SELECT ... (SPESIFIKASI.md bagian 3 dan 5).
-            raise ParseError("INSERT ... SELECT belum didukung", self._peek())
+            query = self._select()
+            if parenthesized:
+                self._expect(T.RPAREN, "')' penutup subquery")
+            return ast.Insert(table, columns, [], query, line=start.line)
         raise ParseError("diharapkan VALUES atau SELECT", self._peek())
 
     def _value_row(self) -> list:
