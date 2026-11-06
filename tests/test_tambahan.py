@@ -301,3 +301,50 @@ def test_tepi_integrasi_file_sample_pemeliharaan_dan_error():
         "produk": "U",
     }
 
+def test_tepi_cli_ekspor_detail_dan_kolom_csv(tmp_path):
+    """Kasus tepi antarmuka CLI: memverifikasi bahwa opsi flag --detail dan --kolom
+    menghasilkan file CSV dengan struktur header dan baris data yang tepat
+    sesuai SPESIFIKASI.md bagian 8.
+
+    Risiko: format CSV (header atau urutan kolom) salah ditulis atau tidak sinkron
+    dengan hasil statement/kolom saat diekspor lewat CLI.
+    """
+    import csv
+
+    sql_file = tmp_path / "transaksi.sql"
+    sql_file.write_text(
+        "SELECT p.nama FROM pelanggan p WHERE p.id = 1;\n"
+        "UPDATE produk SET stok = stok - 1 WHERE id = 10;\n",
+        encoding="utf-8"
+    )
+    out_matrix = tmp_path / "matrix.csv"
+    out_detail = tmp_path / "detail.csv"
+    out_kolom = tmp_path / "kolom.csv"
+
+    # Jalankan CLI dengan flag --detail dan --kolom
+    code = main([
+        str(sql_file),
+        "--out", str(out_matrix),
+        "--detail", str(out_detail),
+        "--kolom", str(out_kolom),
+    ])
+    assert code == 0
+
+    # 1. Verifikasi header dan baris file detail.csv
+    with out_detail.open(encoding="utf-8") as f:
+        detail_rows = list(csv.reader(f))
+    assert detail_rows[0] == ["file", "baris", "jenis", "tabel", "operasi"]
+    assert ["transaksi.sql", "1", "SELECT", "pelanggan", "R"] in detail_rows
+    assert ["transaksi.sql", "2", "UPDATE", "produk", "U"] in detail_rows
+
+    # 2. Verifikasi header dan baris file kolom.csv
+    with out_kolom.open(encoding="utf-8") as f:
+        kolom_rows = list(csv.reader(f))
+    assert kolom_rows[0] == ["file", "baris", "tabel", "kolom", "operasi"]
+    # Penggunaan kolom statement 1 (SELECT)
+    assert ["transaksi.sql", "1", "pelanggan", "id", "R"] in kolom_rows
+    assert ["transaksi.sql", "1", "pelanggan", "nama", "R"] in kolom_rows
+    # Penggunaan kolom statement 2 (UPDATE)
+    assert ["transaksi.sql", "2", "produk", "stok", "U"] in kolom_rows
+    assert ["transaksi.sql", "2", "produk", "stok", "R"] in kolom_rows
+    assert ["transaksi.sql", "2", "produk", "id", "R"] in kolom_rows
