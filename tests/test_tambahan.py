@@ -11,6 +11,7 @@ from crud.parser import parse_sql
 from crud import ast_nodes as ast
 from crud.resolver import Resolver
 from crud.analyzer import analyze_statement
+from crud.cli import main
 
 
 def test_regresi_bug1_keyword_huruf_kecil():
@@ -160,3 +161,27 @@ def test_regresi_bug9_left_outer_join():
     assert stmt.joins[0].kind == "LEFT"
     assert stmt.joins[0].source.name == "crm.alamat"
     assert stmt.joins[0].source.alias == "a"
+    
+def test_regresi_bug10_insert_select_berkurung():
+    """SPESIFIKASI.md 3: INSERT ... (SELECT ...) adalah bentuk sah.
+
+    Sebelum perbaikan, token '(' tertinggal sehingga parser melempar
+    ParseError 'diharapkan VALUES atau SELECT, ditemukan '('.
+    """
+    script = parse_sql("INSERT INTO arsip (SELECT id, total FROM pesanan);")
+    assert script.errors == []
+    stmt = script.statements[0]
+    assert stmt.columns == []
+    assert stmt.query is not None
+
+
+def test_regresi_bug10_insert_select_berkurung_dengan_kolom():
+    """Varian kedua: kurung daftar kolom diikuti kurung subquery.
+
+    Risiko: '(' kedua bisa dikira awal daftar kolom lagi.
+    """
+    script = parse_sql("INSERT INTO arsip (id, total) (SELECT id, total FROM pesanan);")
+    assert script.errors == []
+    stmt = script.statements[0]
+    assert stmt.columns == ["id", "total"]
+    assert stmt.query is not None

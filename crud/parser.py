@@ -211,9 +211,13 @@ class Parser:
             while self._match(T.COMMA):
                 rows.append(self._value_row())
             return ast.Insert(table, columns, rows, None, line=start.line)
+        parenthesized = self._check(T.LPAREN) and self._next_is_select()
+        if parenthesized:
+            self._advance()
         if self._check_kw("SELECT"):
-            # TODO(T1): dukung INSERT INTO ... SELECT ... (SPESIFIKASI.md bagian 3 dan 5).
             query = self._select()
+            if parenthesized:
+                self._expect(T.RPAREN, "')' penutup subquery")
             return ast.Insert(table, columns, [], query, line=start.line)
         raise ParseError("diharapkan VALUES atau SELECT", self._peek())
 

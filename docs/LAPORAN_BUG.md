@@ -275,7 +275,7 @@ Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 
 
 ## Bug 10: Subquery SELECT Bertanda Kurung pada INSERT INTO ... (SELECT ...) Menyebabkan ParseError
 
-**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** (Belum diperbaiki / Tahap Analisis)
+**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** Dava
 
 **Gejala.** Saat query `INSERT INTO` memakai subquery `SELECT` yang diapit tanda kurung `(...)` baik tanpa daftar kolom (misalnya `INSERT INTO arsip (SELECT id, total FROM pesanan);`) maupun dengan daftar kolom (misalnya `INSERT INTO arsip (id, total) (SELECT id, total FROM pesanan);`), parser gagal memproses query dan memicu error `ParseError: Baris 1, kolom 19: diharapkan VALUES atau SELECT, ditemukan '('`. Akibatnya, statement valid ini dibuang oleh parser melalui mekanisme *panic mode*, sehingga tabel target dan tabel sumber tidak tercatat pada matriks CRUD.
 
@@ -293,11 +293,11 @@ python -c "from crud.parser import parse_sql; print(parse_sql('INSERT INTO arsip
 
 Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, parser turunan rekursif harus mengonsumsi token pembatas (*delimiters/enclosures*) secara simetris dan konsisten. Jika sebuah produksi tata bahasa mengizinkan bentuk bertanda kurung (*parenthesized subclause*), parser wajib mengonsumsi token kurung buka `(` terlebih dahulu sebelum memanggil fungsi aturan di dalamnya (`_select()`), serta memastikan token kurung tutup `)` dikonsumsi secara seimbang di akhir aturan tersebut.
 
-**Perbaikan.** (Rencana perbaikan) Di file `crud/parser.py` pada fungsi `_insert()`, sebelum memproses query `SELECT`, parser perlu memeriksa dan mengonsumsi kurung buka opsional dengan `parenthesized = self._match(T.LPAREN) is not None`. Jika tanda kurung ada, parser memanggil `query = self._select()` lalu menuntut kurung penutup dengan `self._expect(T.RPAREN, "')' penutup subquery")`. Jika tidak ada tanda kurung (bentuk lurus `INSERT INTO t SELECT ...`), parser langsung memanggil `query = self._select()`. Alternatif membuang kondisi `and not self._next_is_select()` ditolak karena akan membuat `(SELECT ...)` keliru dibaca sebagai daftar kolom.
+**Perbaikan.** Di file `crud/parser.py` pada fungsi `_insert()`, kami menambahkan `parenthesized = self._check(T.LPAREN) and self._next_is_select()` sebelum pengecekan `SELECT`, lalu mengonsumsi token `(` dengan `self._advance()` bila bernilai benar. Setelah `query = self._select()` selesai, parser menuntut kurung penutup dengan `self._expect(T.RPAREN, "')' penutup subquery")`, sehingga `INSERT INTO arsip (SELECT ...)` maupun `INSERT INTO arsip (id, total) (SELECT ...)` keduanya sah untuk diparse. Bentuk tanpa kurung (`INSERT INTO t SELECT ...`) tidak berubah karena `parenthesized` bernilai `False`. Alternatif membuang kondisi `and not self._next_is_select()` pada pembacaan daftar kolom kami tolak karena `(SELECT ...)` bisa keliru dibaca sebagai daftar nama kolom.
 
-**Test regresi.** `test_regresi_bug10_insert_select_berkurung` di `tests/test_tambahan.py`.
+**Test regresi.** `test_regresi_bug10_insert_select_berkurung` dan `test_regresi_bug10_insert_select_berkurung_dengan_kolom` di `tests/test_tambahan.py`.
 
-**Peran AI.** AI membantu menganalisis alur token pada fungsi `_insert()` saat kami melakukan audit menyeluruh terhadap variasi penulisan query di luar *happy path*, lalu menunjukkan bahwa karakter `(` tertahan tanpa dikonsumsi akibat kondisi `not self._next_is_select()`. Darva dan Dava bersama-sama memverifikasi temuan ini dengan mereproduksi error di terminal Python dan menelusuri eksekusi token di parser.
+**Peran AI.** AI membantu menganalisis alur token pada fungsi `_insert()` saat kami melakukan audit menyeluruh terhadap variasi penulisan query di luar *happy path*, lalu menunjukkan bahwa karakter `(` tertahan tanpa dikonsumsi akibat kondisi `not self._next_is_select()`. Darva dan Dava bersama-sama memverifikasi temuan ini dengan mereproduksi error di terminal Python, menelusuri alur token di `_insert()`, dan menjalankan test regresinya sampai lulus.
 
 ---
 
