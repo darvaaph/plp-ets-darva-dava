@@ -52,6 +52,8 @@ def main(argv=None) -> int:
             had_error = True
             print(f"{path.name}: PARSE ERROR: {err}", file=sys.stderr)
         for diag in res.diagnostics:
+            if diag.level == "error":
+                had_error = True
             print(f"{path.name}: {diag}", file=sys.stderr)
 
     tables = sorted({t for r in results.values() for t in r.matrix()})

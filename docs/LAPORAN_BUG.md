@@ -303,7 +303,7 @@ Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 
 
 ## Bug 11: Diagnostic Resolver Tingkat 'Error' Menghasilkan Exit Code 0 (Status Sukses Palsu) di CLI
 
-**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** (Belum diperbaiki / Tahap Analisis)
+**Ditemukan oleh:** Darva & Dava · **Diperbaiki oleh:** Dava
 
 **Gejala.** Saat antarmuka baris perintah (`crud.cli`) dijalankan pada file SQL yang mengandung kesalahan semantik pada tahap resolusi (contohnya pada `data/sample/audit.sql` baris 18 yang memuat alias tidak terdefinisi: `SELECT s.id FROM pengguna u`), CLI memang mencetak pesan kesalahan ke `stderr`, namun proses CLI selesai dengan status keberhasilan (*exit code*) bernilai `0`. Akibatnya, lingkungan eksekusi (seperti terminal PowerShell, skrip bash CI/CD, atau *test runner* otomatis) menganggap proses berjalan sukses tanpa galat, padahal terdapat kesalahan fatal pada file tersebut.
 
@@ -329,8 +329,8 @@ Kode hanya mencetak teks diagnostik tanpa memeriksa apakah tingkat keparahannya 
 
 Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.1 Static Scope & 11.3 A Resolver Class)** serta standar rekayasa perangkat lunak, pass resolusi semantik merupakan tahap validasi krusial yang setara dengan tahap scanning dan parsing. Apabila sebuah pass semantik menemukan pelanggaran fatal (*semantic error* seperti referensi variabel/alias tak dikenal), lingkungan pemroses (*driver/CLI*) wajib menandai status proses sebagai gagal (*error exit status non-zero*) agar pipeline otomatisasi tidak menganggap input yang salah sebagai input yang valid.
 
-**Perbaikan.** (Rencana perbaikan) Di file `crud/cli.py` pada loop `for diag in res.diagnostics:`, tambahkan pemeriksaan tingkat keparahan: bila `diag.level == "error"`, maka ubah `had_error = True`. Diagnostik bertaraf `"warning"` (seperti kolom ambigu atau subquery tanpa alias) tetap dibiarkan tanpa mengubah `had_error` agar peringatan tidak membatalkan eksekusi normal.
+**Perbaikan.** Di file `crud/cli.py` pada fungsi `main()`, di dalam perulangan `for diag in res.diagnostics:` kami menambahkan pemeriksaan `if diag.level == "error": had_error = True` sebelum diagnostik dicetak. Dengan begitu error semantik dari resolver membuat `main()` mengembalikan `1`, sedangkan diagnostik bertaraf `"warning"` (misalnya kolom ambigu atau subquery tanpa alias) tetap tidak mengubah exit code. Alternatif menganggap semua diagnostik sebagai error kami tolak karena warning bukan kegagalan fatal dan akan membuat file yang masih valid dianggap gagal.
 
-**Test regresi.** `test_regresi_bug11_cli_exit_code_error_resolver` di `tests/test_tambahan.py`.
+**Test regresi.** `test_regresi_bug11_cli_error_resolver_exit_code` dan `test_tepi_cli_warning_tetap_exit_code_nol` di `tests/test_tambahan.py`.
 
-**Peran AI.** AI menunjukkan inkonsistensi perilaku CLI yang tidak mengecek properti `level` pada list `diagnostics`, sehingga status proses tetap `0` meskipun terdapat error semantik. Darva dan Dava bersama-sama memverifikasi temuan ini dengan menguji perintah CLI pada file `data/sample/audit.sql` di terminal PowerShell dan memeriksa isi variabel `$LASTEXITCODE`.
+**Peran AI.** AI menunjukkan inkonsistensi perilaku CLI yang tidak mengecek properti `level` pada list `diagnostics`, sehingga status proses tetap `0` meskipun terdapat error semantik. Darva dan Dava bersama-sama memverifikasi temuan ini dengan menguji perintah CLI pada file `data/sample/audit.sql` di terminal PowerShell, memeriksa isi variabel `$LASTEXITCODE`, dan menjalankan test regresinya sampai lulus.

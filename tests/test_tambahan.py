@@ -185,3 +185,26 @@ def test_regresi_bug10_insert_select_berkurung_dengan_kolom():
     stmt = script.statements[0]
     assert stmt.columns == ["id", "total"]
     assert stmt.query is not None
+
+def test_regresi_bug11_cli_error_resolver_exit_code(tmp_path, capsys):
+    """Error resolver harus membuat CLI keluar dengan kode 1.
+
+    Sebelum perbaikan, diagnostik hanya dicetak ke stderr dan main()
+    tetap mengembalikan 0.
+    """
+    path = tmp_path / "alias_salah.sql"
+    path.write_text("SELECT s.id FROM pengguna u;", encoding="utf-8")
+    code = main([str(path), "--out", str(tmp_path / "matrix.csv")])
+    assert code == 1
+    assert "tidak terdefinisi" in capsys.readouterr().err
+
+
+def test_tepi_cli_warning_tetap_exit_code_nol(tmp_path):
+    """Kasus tepi: warning ambigu bukan error fatal.
+
+    Risiko: perbaikan terlalu kasar dengan menganggap semua diagnostics gagal.
+    """
+    path = tmp_path / "ambigu.sql"
+    path.write_text("SELECT nama FROM pelanggan p, pesanan o;", encoding="utf-8")
+    code = main([str(path), "--out", str(tmp_path / "matrix.csv")])
+    assert code == 0
