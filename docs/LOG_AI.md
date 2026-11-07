@@ -1,6 +1,6 @@
 # Log Penggunaan AI
 
-Catat setiap penggunaan AI atau coding agent yang memengaruhi kode atau laporan.
+Dokumen ini mencatat seluruh interaksi dan penggunaan AI / coding agent dalam proses investigasi arsitektur, perbaikan kode, penulisan pengujian, dan penyusunan laporan sesuai dengan prinsip kejujuran akademik dan verifikasi mandiri.
 
 | No | Siapa | Prompt / tugas (ringkas) | Hasil: diterima, diubah, atau ditolak | Alasan | Cara verifikasi |
 | --- | --- | --- | --- | --- | --- |
