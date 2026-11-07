@@ -1,8 +1,6 @@
 # Laporan Bug
 
-Salin blok di bawah untuk setiap bug. Bagian **Akar masalah** wajib ditulis dengan kata-kata
-
-sendiri dan memakai konsep dari *Crafting Interpreters* (sebutkan bab). Bagian ini diuji lisan.
+Dokumen ini mencatat 11 bug yang ditemukan dan diperbaiki pada pipeline ekstraktor CRUD SQL (Lexer, Parser, Resolver, Analyzer, dan CLI). Setiap entri menguraikan gejala, reproduksi minimal, analisis akar masalah (tahap pipeline, konsep dan bab rujukan *Crafting Interpreters*, serta pasal SPESIFIKASI.md), perbaikan kode, test regresi di 	ests/test_tambahan.py, serta peran AI dalam investigasi.
 
 ---
 
@@ -20,11 +18,9 @@ select id from t;
 
 ```
 
-**Akar masalah.** Di file `crud/lexer.py` pada fungsi `_word()`, pengecekan kata kunci menggunakan baris: `if text in KEYWORDS:`. 
-
-Karena daftar `KEYWORDS` berisi huruf kapital semua (`SELECT`, `FROM`, dll.), perbandingan string di Python yang bersifat *case-sensitive* menganggap `'select'` huruf kecil tidak ada di daftar, sehingga kode melompat ke blok `else` dan menjadikannya `IDENT`.
-
-Menurut **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.7 Reserved Words and Identifiers)**, scanner membedakan kata kunci dan identifier dengan mencocokkan kata ke kamus keyword. Karena SQL tidak peduli huruf besar-kecil, scanner harus menyamakan formatnya terlebih dahulu (diubah ke kapital dengan `.upper()`) sebelum dicocokkan ke kamus agar kata kunci tidak salah dianggap sebagai identifier.
+**Akar masalah.** * **Tahap pipeline:** Lexer / Scanning (`crud/lexer.py` pada fungsi `_word()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 4 (*Scanning* - Sub-bab 4.7 *Reserved Words and Identifiers*) dan SPESIFIKASI.md Bagian 2.2.
+* **Penyebab teknis:** Kode awal mengecek kata kunci dengan `if text in KEYWORDS:`, padahal daftar `KEYWORDS` seluruhnya memakai huruf kapital (`SELECT`, `FROM`, dll.). Operator `in` pada Python melakukan pencocokan string yang membedakan huruf besar dan kecil (*case-sensitive*), sehingga kata kunci huruf kecil seperti `'select'` tidak cocok dan malah masuk ke blok `else` sebagai nama kolom biasa (`IDENT`). Sesuai Bab 4.7, pada bahasa yang tidak peka huruf kapital (*case-insensitive*) seperti SQL, scanner wajib menormalisasi lexeme ke huruf kapital terlebih dahulu (`.upper()`) sebelum mencocokkannya ke tabel kata kunci.
 
 **Perbaikan.** Di file `crud/lexer.py` pada fungsi `_word()`, kami mengubah teks ke huruf kapital dengan `upper = text.upper()` sebelum dicek ke `KEYWORDS`. Jika ada di kamus, nilai `upper` disimpan sebagai token `KEYWORD`. Jika tidak ada, teks asli disimpan sebagai `IDENT`. Alternatif mengubah daftar `KEYWORDS` menjadi huruf kecil kami tolak karena spesifikasi mewajibkan nilai token dinormalisasi ke huruf kapital.
 
@@ -48,9 +44,9 @@ SELECT 'O''Brien' FROM t;
 
 ```
 
-**Akar masalah.** Di file `crud/lexer.py` pada fungsi `_string()`, pembacaan karakter langsung berhenti (`break`) seketika menemukan karakter tanda kutip `'`. Kode lama tidak memeriksa karakter berikutnya (*tidak melakukan lookahead*). Padahal tanda kutip bisa berarti penutup string atau karakter escape jika diikuti kutip lagi (`''`).
-
-Menurut **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.6 Longer Lexemes / String Literals)**, saat membaca string dengan karakter escape, scanner wajib mengintip satu karakter ke depan (*lookahead*) sebelum memutuskan apakah itu penutup string atau bukan.
+**Akar masalah.** * **Tahap pipeline:** Lexer / Scanning (`crud/lexer.py` pada fungsi `_string()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 4 (*Scanning* - Sub-bab 4.6 *Longer Lexemes / String Literals*) dan SPESIFIKASI.md Bagian 2.4.
+* **Penyebab teknis:** Pembacaan karakter langsung berhenti (`break`) seketika menemukan karakter tanda kutip tunggal `'`. Scanner tidak memeriksa karakter berikutnya (*tidak melakukan lookahead*). Padahal tanda kutip tunggal di dalam SQL memiliki fungsi ganda: dapat berupa penutup string atau bagian dari escape sequence jika diikuti tanda kutip berikutnya secara berdampingan (`''`). Sesuai konsep Bab 4.6, saat memindai literal yang mendukung aturan escape, scanner wajib mengintip satu karakter ke depan (*one-character lookahead*) sebelum memutuskan akhir suatu lexeme.
 
 **Perbaikan.** Di file `crud/lexer.py` pada fungsi `_string()`, kami menambahkan pengecekan `if not self._match("'"): break`. Jika setelah tanda kutip ditemukan tanda kutip lagi, karakter kedua ikut dikonsumsi dan satu karakter kutip dimasukkan ke dalam string. Jika tidak ada kutip lagi, barulah pembacaan string selesai (`break`). Alternatif menggunakan `replace("''", "'")` setelah string dibaca kami tolak karena berisiko merusak penghitungan posisi kolom token.
 
@@ -74,9 +70,9 @@ SELECT id FROM t WHERE a = 1 OR b = 2 AND c = 3;
 
 ```
 
-**Akar masalah.** Di file `crud/parser.py`, fungsi `_logical()` menangani `AND` dan `OR` di dalam perulangan yang sama: `while self._check_kw("AND", "OR"):`. Karena disatukan, parser menganggap keduanya setara dan membaca lurus dari kiri ke kanan.
-
-Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.2 Precedence and Associativity)**, tata bahasa untuk operator yang berbeda tingkatan harus dipisah ke fungsi yang berbeda secara berjenjang (*stratified functions*). Fungsi operator lemah (`OR`) harus memanggil fungsi operator yang lebih kuat (`AND`).
+**Akar masalah.** * **Tahap pipeline:** Parser / Parsing Ekspresi (`crud/parser.py` pada fungsi `_logical()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 6 (*Parsing Expressions* - Sub-bab 6.1 *Ambiguity and the Parsing Game* & 6.2 *Recursive Descent Parsing*), Bab 9 (*Control Flow* - Sub-bab 9.3 *Logical Operators*), dan SPESIFIKASI.md Bagian 3.1.
+* **Penyebab teknis:** Fungsi `_logical()` sebelumnya menangani operator `AND` dan `OR` di dalam satu perulangan yang sama: `while self._check_kw("AND", "OR"):`. Karena digabung di satu fungsi yang sama, parser memperlakukan kedua operator memiliki prioritas yang setara dan mengevaluasinya rata dari kiri ke kanan. Sesuai konsep Bab 6.2 dan 9.3, recursive descent parser menerapkan tingkatan prioritas operator melalui hierarki pemanggilan fungsi: fungsi untuk operator prioritas lebih rendah (`OR`) harus memanggil fungsi untuk operator prioritas lebih tinggi (`AND`).
 
 **Perbaikan.** Di file `crud/parser.py`, kami memisahkan fungsi `_logical()` menjadi dua tingkat. Fungsi `_logical()` sekarang khusus memproses `OR` dan memanggil `_and()`, sedangkan fungsi baru `_and()` memproses `AND` lalu memanggil `_not()`. Alternatif membuat tabel presedensi tidak kami pilih karena operator logika di sini hanya ada dua tingkat (`AND` dan `OR`), sehingga membuat fungsi berjenjang jauh lebih sederhana dan langsung sesuai spesifikasi.
 
@@ -102,9 +98,9 @@ SELECT s.id FROM pengguna u;
 
 ```
 
-**Akar masalah.** Di file `crud/resolver.py` pada fungsi `_delete()`, resolver membuka scope baru dengan memanggil `self._push()`, tetapi lupa memanggil `self._pop()` di akhir fungsi. Akibatnya scope `DELETE` tidak pernah ditutup (*scope leak*), sehingga query setelahnya masih bisa melihat alias tersebut.
-
-Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.3 A Resolver Class)**, setiap kali kita membuka scope (`_push`), kita wajib menutupnya kembali (`_pop`) begitu blok selesai agar variabel di dalamnya tidak bocor keluar.
+**Akar masalah.** * **Tahap pipeline:** Resolver / Resolusi Semantik (`crud/resolver.py` pada fungsi `_delete()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 11 (*Resolving and Binding* - Sub-bab 11.3.1 *Resolving Blocks* & 11.3 *A Resolver Class*) dan SPESIFIKASI.md Bagian 4.5.
+* **Penyebab teknis:** Resolver membuka scope baru untuk statement `DELETE` dengan memanggil `self._push()`, tetapi lupa memanggil `self._pop()` saat statement selesai diproses. Akibatnya terjadi kebocoran scope (*scope leak*), di mana lingkungan lokal `DELETE` beserta alias tabelnya (misalnya `s` untuk `sesi`) tetap tertinggal di puncak tumpukan scope dan terbaca oleh query setelahnya. Sesuai konsep Bab 11.3, pembukaan dan penutupan scope harus selalu berpasangan: begitu sebuah statement selesai diproses, scope lokalnya wajib dibuang agar tidak mencemari statement berikutnya.
 
 **Perbaikan.** Di file `crud/resolver.py` pada fungsi `_delete()`, kami menambahkan pemanggilan `self._pop()` setelah `self._expr(dele.where)`. Posisinya di akhir agar ekspresi `WHERE` masih dapat merujuk alias target `DELETE` (misalnya `s.id`), lalu scope ditutup sebelum statement berikutnya diproses. Alternatif mereset `self.scope = None` di `resolve_script()` kami tolak karena hanya menambal gejala dan menyembunyikan ketidakseimbangan `_push()`/`_pop()`.
 
@@ -134,9 +130,9 @@ python -c "from crud.lexer import tokenize; print(tokenize('SELECT id FROM t WHE
 
 ```
 
-**Akar masalah.** Di `crud/lexer.py`, penanganan karakter `<` pada `_scan_token()` hanya menguji satu kemungkinan: `op = "<=" if self._match("=") else "<"`. Karena karakter berikutnya bukan `=`, token langsung diputus `"<"`, sedangkan `>` tertinggal dan menjadi token baru pada putaran berikutnya.
-
-Menurut **Buku *Crafting Interpreters* Bab 4 (Scanning - Sub-bab 4.5 Recognizing Lexemes)**, operator dua karakter dikenali lewat *lookahead* dengan prinsip *maximal munch* (jika ada beberapa kemungkinan yang cocok, ambil yang terpanjang). Kode lama melanggar aturan ini karena tidak mengecek karakter `>`.
+**Akar masalah.** * **Tahap pipeline:** Lexer / Scanning (`crud/lexer.py` pada fungsi `_scan_token()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 4 (*Scanning* - Sub-bab 4.5 *Recognizing Lexemes & Maximal Munch*) dan SPESIFIKASI.md Bagian 2.5.
+* **Penyebab teknis:** Penanganan karakter `<` pada fungsi `_scan_token()` awalnya hanya menguji satu kemungkinan: `op = "<=" if self._match("=") else "<"`. Ketika karakter berikutnya adalah `>`, scanner langsung memutus token menjadi `"<"`, sedangkan karakter `>` tertinggal dan menjadi token operator baru pada putaran scanner berikutnya. Ini melanggar aturan dasar *Maximal Munch* (Bab 4.5), di mana scanner wajib selalu mengonsumsi rangkaian karakter terpanjang yang valid (*longest valid match*). Operator `<>` harus dikenali utuh sebagai satu kesatuan token operator pembanding.
 
 **Perbaikan.** Di file `crud/lexer.py` pada fungsi `_scan_token()`, kami menambahkan pengecekan `elif self._match(">"): op = "<>"` saat membaca karakter `<`. Alternatif menyatukan dua token di tahap parser kami tolak karena penggabungan karakter operator adalah tanggung jawab lexer sesuai prinsip *maximal munch*.
 
@@ -170,9 +166,9 @@ python -m crud.cli data/sample/campuran_error.sql
 
 ```
 
-**Akar masalah.** Di `crud/parser.py`, fungsi `_synchronize()` hanya berisi loop `while not self._at_end(): self._advance()`. Kode ini membuang semua token terus-menerus sampai akhir file (EOF) tanpa pernah berhenti di tanda titik koma (`;`).
-
-Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3.3 Synchronizing a recursive descent parser)**, fungsi sinkronisasi pada *panic mode* wajib mencari batas statement terdekat (seperti `;`) agar parser bisa pulih dan statement valid berikutnya tetap dapat diproses.
+**Akar masalah.** * **Tahap pipeline:** Parser / Error Recovery (`crud/parser.py` pada fungsi `_synchronize()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 6 (*Parsing Expressions* - Sub-bab 6.3.3 *Synchronizing a Recursive Descent Parser*) dan SPESIFIKASI.md Bagian 6.
+* **Penyebab teknis:** Fungsi pemulihan kesalahan `_synchronize()` awalnya hanya berisi loop `while not self._at_end(): self._advance()`. Fungsi ini membuang seluruh sisa token terus-menerus hingga akhir berkas (`EOF`) tanpa pernah menetapkan titik sinkronisasi perantara. Sesuai konsep Bab 6.3.3, saat parser mengalami kegagalan pada *panic mode*, parser harus membuang token hanya sampai menemukan batas pernyataan berikutnya (*synchronization boundary / recovery point*)—dalam SQL berupa tanda titik koma (`;`)—lalu kembali ke mode normal agar pernyataan-pernyataan valid setelahnya tetap dapat diekstrak.
 
 **Perbaikan.** Di file `crud/parser.py` pada fungsi `_synchronize()`, kami menambahkan kondisi `if self._advance().type == T.SEMICOLON: return`. Dengan begitu, pembuangan token langsung berhenti begitu tanda titik koma ditemukan dan parser kembali ke mode normal untuk memproses statement berikutnya. Alternatif mencari keyword awal statement (seperti `SELECT`, `UPDATE`) tidak kami pilih karena SPESIFIKASI.md Bagian 6 secara eksplisit menetapkan batas pemulihan adalah tanda titik koma (`;`).
 
@@ -195,9 +191,9 @@ SELECT x.id FROM pelanggan x
 WHERE x.id IN (SELECT x.pelanggan_id FROM pesanan x WHERE x.total > 500000);
 ```
 
-**Akar masalah.** Di `crud/resolver.py` pada fungsi `_lookup()`, rantai scope dikumpulkan dari dalam ke luar (`chain[0]` = scope terdalam), tetapi pencariannya ditulis `for scope in reversed(chain):`. Pemanggilan `reversed()` membuat pencarian dimulai dari scope terluar, sehingga alias di query luar menimpa alias di dalam subquery.
-
-Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.3 A Resolver Class)**, resolusi variabel harus mencari dari scope lokal/terdalam terlebih dahulu sebelum mencari ke scope induknya.
+**Akar masalah.** * **Tahap pipeline:** Resolver / Resolusi Semantik (`crud/resolver.py` pada fungsi `_lookup()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 11 (*Resolving and Binding* - Sub-bab 11.1 *Static Scope* & 11.3.3 *Resolving Variable Expressions*) dan SPESIFIKASI.md Bagian 4.3.
+* **Penyebab teknis:** Rantai scope dikumpulkan dalam list `chain` dari scope terdalam (`self.scope`) hingga scope terluar (akar). Namun pencariannya dipanggil menggunakan `for scope in reversed(chain):`. Pemanggilan `reversed()` justru membalik urutan pencarian sehingga scope terluar diperiksa terlebih dahulu. Sesuai konsep Bab 11.1 dan 11.3, resolusi leksikal wajib memeriksa rantai scope dari dalam ke luar agar deklarasi lokal di dalam subquery dapat menutupi (*shadow*) deklarasi bernama sama di query luar. Pembalikan urutan ini menyebabkan alias di query luar menimpa resolusi alias lokal di dalam subquery.
 
 **Perbaikan.** Di file `crud/resolver.py` pada fungsi `_lookup()`, kami menghapus pemanggilan `reversed()` sehingga loop menjadi `for scope in chain:`. Karena elemen `chain` dikumpulkan mulai dari `self.scope` (scope terdalam) lalu naik ke `parent`, iterasi langsung mencari dari scope terdalam ke scope luar. Dengan begitu, alias lokal di dalam subquery menutupi (*shadow*) alias bernama sama dari query luar.
 
@@ -231,9 +227,9 @@ seharusnya                        : {'pesanan': {'U'}, 'pelanggan': {'R'}}
 
 ```
 
-**Akar masalah.** Di `crud/analyzer.py` pada fungsi `analyze_statement()`, penanganan `UPDATE` memanggil `_collect(stmt.where, usage, "U")`. Karena yang diteruskan adalah `"U"`, semua tabel di dalam subquery klausa `WHERE` ikut ditandai sebagai Update. Sebagai pembanding, penanganan `DELETE` sudah benar dengan meneruskan `"R"`.
-
-Aturan ini mengacu pada aturan proyek di SPESIFIKASI.md Bagian 5 (tabel aturan CRUD).
+**Akar masalah.** * **Tahap pipeline:** Analyzer / Analisis Semantik AST (`crud/analyzer.py` pada fungsi `analyze_statement()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 5 (*Representing Code* - Sub-bab 5.3 *Working with Trees*) dan SPESIFIKASI.md Bagian 5 (Aturan Operasi CRUD).
+* **Penyebab teknis:** Pada penanganan simpul `ast.Update`, analyzer memanggil `_collect(stmt.where, usage, "U")` dan `_collect(assignment.value, usage, "U")`, yang memaksakan operasi `"U"` (Update) ke seluruh sub-ekspresi di dalamnya. Sesuai SPESIFIKASI.md Bagian 5 dan penelusuran pohon AST pada Bab 5.3, operasi `"U"` hanya berlaku untuk tabel target yang datanya diubah. Subquery di dalam klausa `WHERE` atau nilai `SET` hanya dibaca untuk evaluasi kondisi atau perhitungan nilai, sehingga operasi yang diteruskan ke subquery seharusnya `"R"` (Read).
 
 **Perbaikan.** Di file `crud/analyzer.py` pada fungsi `analyze_statement()`, kami mengubah operasi yang diteruskan ke `_collect()` untuk `UPDATE` dari `"U"` menjadi `"R"`, baik pada `assignment.value` (subquery di `SET`) maupun `stmt.where`. Target `UPDATE` tetap ditandai `"U"` oleh `usage[stmt.table.name].add("U")`, sehingga hanya tabel yang dibaca lewat subquery yang berubah menjadi `R`. Alternatif menambahkan parameter khusus subquery pada `_collect()` kami tolak karena seluruh tabel yang ditemukan fungsi itu di dalam ekspresi `SET`/`WHERE` memang hanya berasal dari subquery, jadi cukup satu nilai argumen.
 
@@ -261,9 +257,9 @@ SELECT c.id FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id 
 python -c "from crud.pipeline import analyze_source; print(analyze_source('SELECT c.id FROM crm.pelanggan c LEFT OUTER JOIN crm.alamat a ON a.pelanggan_id = c.id;'))"
 ```
 
-**Akar masalah.** Di file `crud/parser.py` pada fungsi `_join()`, parser mengecek kata kunci `LEFT` dengan `elif self._match_kw("LEFT"): kind = "LEFT"`, tetapi langsung melanjutkan ke `self._expect_kw("JOIN")` tanpa mengecek kemungkinan adanya kata kunci opsional `OUTER`.
-
-Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, setiap fungsi pada parser turunan rekursif merepresentasikan aturan produksi tata bahasa. Jika sebuah aturan memiliki klausa opsional seperti `[ "OUTER" ]`, parser wajib mengonsumsi token tersebut secara kondisional menggunakan fungsi *match* sebelum menuntut token wajib berikutnya (`JOIN`). Karena token opsional `OUTER` dilewati, parser mendapati token `OUTER` padahal yang diekspektasikan adalah `JOIN`, sehingga terjadi `ParseError`.
+**Akar masalah.** * **Tahap pipeline:** Parser / Parsing Klausa Join (`crud/parser.py` pada fungsi `_join()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 6 (*Parsing Expressions* - Sub-bab 6.2 *Recursive Descent Parsing*) dan SPESIFIKASI.md Bagian 3.
+* **Penyebab teknis:** Pada fungsi `_join()`, setelah membaca kata kunci `LEFT`, parser langsung memanggil `self._expect_kw("JOIN")` tanpa memeriksa kemungkinan adanya kata kunci opsional `OUTER`. Padahal aturan EBNF pada SPESIFIKASI.md Bagian 3 mendefinisikan produksi join sebagai `LEFT [ "OUTER" ] "JOIN"`. Sesuai konsep Bab 6.2, setiap simbol terminal opsional dalam aturan tata bahasa harus dikonsumsi secara kondisional (`_match_kw("OUTER")`) sebelum menuntut terminal wajib berikutnya. Karena kata kunci `OUTER` tidak dikonsumsi, parser mendapati token yang tidak diharapkan dan melempar `ParseError`.
 
 **Perbaikan.** Di file `crud/parser.py` pada fungsi `_join()`, setelah menetapkan `kind = "LEFT"`, kami menambahkan pengecekan `self._match_kw("OUTER")`. Jika kata `OUTER` ditemukan, token tersebut dikonsumsi; jika tidak ada (hanya `LEFT JOIN`), parser tetap berjalan normal menuju `self._expect_kw("JOIN")`. Alternatif mengabaikan kata `OUTER` di lexer kami tolak karena `OUTER` merupakan kata kunci SQL yang sah dan bernilai semantik di dalam tata bahasa.
 
@@ -289,9 +285,9 @@ INSERT INTO arsip (SELECT id, total FROM pesanan);
 python -c "from crud.parser import parse_sql; print(parse_sql('INSERT INTO arsip (SELECT id, total FROM pesanan);'))"
 ```
 
-**Akar masalah.** Di file `crud/parser.py` pada fungsi `_insert()`, baris `if self._check(T.LPAREN) and not self._next_is_select():` sengaja dirancang agar kurung buka `(` tidak dibaca sebagai daftar kolom bila diikuti kata kunci `SELECT`. Akan tetapi, parser hanya melompati blok pembacaan kolom tanpa mengonsumsi karakter `(` tersebut. Akibatnya, saat eksekusi berlanjut ke baris `if self._check_kw("SELECT"):`, token saat ini masih berupa kurung buka `(` (`T.LPAREN`), sehingga pengecekan gagal dan parser terlempar ke klausa error `raise ParseError("diharapkan VALUES atau SELECT", self._peek())`.
-
-Menurut **Buku *Crafting Interpreters* Bab 6 (Parsing Expressions - Sub-bab 6.3 Recursive Descent Parsing)**, parser turunan rekursif harus mengonsumsi token pembatas (*delimiters/enclosures*) secara simetris dan konsisten. Jika sebuah produksi tata bahasa mengizinkan bentuk bertanda kurung (*parenthesized subclause*), parser wajib mengonsumsi token kurung buka `(` terlebih dahulu sebelum memanggil fungsi aturan di dalamnya (`_select()`), serta memastikan token kurung tutup `)` dikonsumsi secara seimbang di akhir aturan tersebut.
+**Akar masalah.** * **Tahap pipeline:** Parser / Parsing Klausa Insert (`crud/parser.py` pada fungsi `_insert()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 6 (*Parsing Expressions* - Sub-bab 6.2 *Recursive Descent Parsing*) dan SPESIFIKASI.md Bagian 3 & 3.2.
+* **Penyebab teknis:** Pada fungsi `_insert()`, kondisi `not self._next_is_select()` berhasil mencegah tanda kurung subquery `(SELECT ...)` dibaca sebagai daftar kolom target, namun parser tidak mengonsumsi token `(`. Akibatnya, saat masuk ke pengecekan `SELECT`, token yang aktif masih berupa kurung buka (`T.LPAREN`), sehingga parser melempar `ParseError: diharapkan VALUES atau SELECT`. Sesuai konsep Bab 6.2, parser harus mengonsumsi kurung buka pembuka subquery (`self._advance()`) sebelum memanggil `_select()`, dan memastikan kurung tutup penutup subquery dipanggil setelah subquery selesai diparse.
 
 **Perbaikan.** Di file `crud/parser.py` pada fungsi `_insert()`, kami menambahkan `parenthesized = self._check(T.LPAREN) and self._next_is_select()` sebelum pengecekan `SELECT`, lalu mengonsumsi token `(` dengan `self._advance()` bila bernilai benar. Setelah `query = self._select()` selesai, parser menuntut kurung penutup dengan `self._expect(T.RPAREN, "')' penutup subquery")`, sehingga `INSERT INTO arsip (SELECT ...)` maupun `INSERT INTO arsip (id, total) (SELECT ...)` keduanya sah untuk diparse. Bentuk tanpa kurung (`INSERT INTO t SELECT ...`) tidak berubah karena `parenthesized` bernilai `False`. Alternatif membuang kondisi `and not self._next_is_select()` pada pembacaan daftar kolom kami tolak karena `(SELECT ...)` bisa keliru dibaca sebagai daftar nama kolom.
 
@@ -320,14 +316,9 @@ echo $LASTEXITCODE
 ```
 Nilai `$LASTEXITCODE` yang keluar adalah `0` (seharusnya `1`).
 
-**Akar masalah.** Di file `crud/cli.py` pada fungsi `main()`, penanda kesalahan `had_error = False` hanya diubah menjadi `True` saat mendeteksi `res.lex_error` atau `res.parse_errors`. Pada perulangan diagnostik resolver:
-```python
-for diag in res.diagnostics:
-    print(f"{path.name}: {diag}", file=sys.stderr)
-```
-Kode hanya mencetak teks diagnostik tanpa memeriksa apakah tingkat keparahannya bernilai `diag.level == "error"`. Akibatnya, pada akhir fungsi `main()`, baris `return 1 if had_error else 0` tetap mengembalikan `0` karena `had_error` masih bernilai `False`.
-
-Menurut **Buku *Crafting Interpreters* Bab 11 (Resolving and Binding - Sub-bab 11.1 Static Scope & 11.3 A Resolver Class)** serta standar rekayasa perangkat lunak, pass resolusi semantik merupakan tahap validasi krusial yang setara dengan tahap scanning dan parsing. Apabila sebuah pass semantik menemukan pelanggaran fatal (*semantic error* seperti referensi variabel/alias tak dikenal), lingkungan pemroses (*driver/CLI*) wajib menandai status proses sebagai gagal (*error exit status non-zero*) agar pipeline otomatisasi tidak menganggap input yang salah sebagai input yang valid.
+**Akar masalah.** * **Tahap pipeline:** CLI / Driver Antarmuka Baris Perintah (`crud/cli.py` pada fungsi `main()`).
+* **Konsep & Bab *Crafting Interpreters*:** Bab 11 (*Resolving and Binding* - Sub-bab 11.1 *Static Scope* & 11.5 *Resolution Errors*) serta SPESIFIKASI.md Bagian 4 & 8.
+* **Penyebab teknis:** Variabel pelacak error `had_error = False` awalnya hanya diperbarui jika terjadi error pada tahap lexer atau parser. Pada tahap resolver, kode hanya mencetak pesan diagnostik ke `stderr` tanpa memeriksa properti tingkat keparahan `diag.level`. Akibatnya, meskipun resolver mendeteksi error semantik fatal (seperti alias yang tidak terdefinisi), fungsi `main()` tetap mengembalikan exit code `0` (sukses). Sesuai konsep Bab 11.5, error pada tahap resolusi semantik adalah kesalahan fatal yang wajib membuat program mengembalikan status keluar non-nol (*exit code 1*), sedangkan diagnostik bertaraf `"warning"` tetap tidak boleh menggagalkan proses.
 
 **Perbaikan.** Di file `crud/cli.py` pada fungsi `main()`, di dalam perulangan `for diag in res.diagnostics:` kami menambahkan pemeriksaan `if diag.level == "error": had_error = True` sebelum diagnostik dicetak. Dengan begitu error semantik dari resolver membuat `main()` mengembalikan `1`, sedangkan diagnostik bertaraf `"warning"` (misalnya kolom ambigu atau subquery tanpa alias) tetap tidak mengubah exit code. Alternatif menganggap semua diagnostik sebagai error kami tolak karena warning bukan kegagalan fatal dan akan membuat file yang masih valid dianggap gagal.
 
